@@ -23,20 +23,22 @@ class LabBorrowApp extends StatelessWidget {
 // ─── Theme ────────────────────────────────────────────────────────────────────
 
 class AppTheme {
-  static const Color primary = Color(0xFF0A2540);       // Deep navy
-  static const Color accent = Color(0xFF00B4D8);        // Cyan-teal
-  static const Color success = Color(0xFF06D6A0);       // Mint green
-  static const Color warning = Color(0xFFFFB703);       // Amber
-  static const Color danger = Color(0xFFEF476F);        // Rose-red
-  static const Color surface = Color(0xFFF4F7FB);       // Light gray-blue
-  static const Color cardBg = Color(0xFFFFFFFF);
-  static const Color textDark = Color(0xFF0A2540);
-  static const Color textMid = Color(0xFF5A7184);
-  static const Color textLight = Color(0xFF9EB3C2);
-  static const Color divider = Color(0xFFE4EBF0);
+  // ── NEU Brand Colors ──────────────────────────────────────────────────────
+  static const Color primary    = Color(0xFF1B3A8C);   // NEU royal blue
+  static const Color primaryDark= Color(0xFF112266);   // darker navy for gradients
+  static const Color accent     = Color(0xFFF5A623);   // NEU gold (from seal)
+  static const Color success    = Color(0xFF27AE60);   // green
+  static const Color warning    = Color(0xFFF39C12);   // amber-orange
+  static const Color danger     = Color(0xFFE74C3C);   // red
+  static const Color surface    = Color(0xFFF0F3FA);   // very light blue-grey
+  static const Color cardBg     = Color(0xFFFFFFFF);
+  static const Color textDark   = Color(0xFF1A2340);   // near-black blue
+  static const Color textMid    = Color(0xFF5A6A8A);
+  static const Color textLight  = Color(0xFF9AAAC8);
+  static const Color divider    = Color(0xFFDDE4F0);
 
   static ThemeData get lightTheme => ThemeData(
-        fontFamily: 'Georgia',
+        fontFamily: 'Roboto',
         colorScheme: const ColorScheme.light(
           primary: primary,
           secondary: accent,
@@ -49,16 +51,16 @@ class AppTheme {
           elevation: 0,
           centerTitle: true,
           titleTextStyle: TextStyle(
-            fontFamily: 'Georgia',
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
+            fontFamily: 'Roboto',
+            fontSize: 17,
+            fontWeight: FontWeight.w700,
             color: Colors.white,
-            letterSpacing: 0.5,
+            letterSpacing: 0.3,
           ),
         ),
         elevatedButtonTheme: ElevatedButtonThemeData(
           style: ElevatedButton.styleFrom(
-            backgroundColor: accent,
+            backgroundColor: primary,
             foregroundColor: Colors.white,
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
@@ -83,10 +85,126 @@ class AppTheme {
           ),
           focusedBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(12),
-            borderSide: const BorderSide(color: accent, width: 2),
+            borderSide: const BorderSide(color: primary, width: 2),
           ),
         ),
       );
+}
+
+// ── NEU Logo Widget ───────────────────────────────────────────────────────────
+// Uses a circular golden seal look matching the NEU crest.
+// Replace with: Image.asset('assets/neu_logo.png') once you add the asset.
+class NeuLogo extends StatelessWidget {
+  final double size;
+  const NeuLogo({super.key, this.size = 48});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: Colors.white,
+        border: Border.all(color: AppTheme.accent, width: size * 0.04),
+        boxShadow: [
+          BoxShadow(
+              color: AppTheme.accent.withOpacity(0.25),
+              blurRadius: 8,
+              offset: const Offset(0, 2)),
+        ],
+      ),
+      child: ClipOval(
+        // 👉 Swap this entire child with:
+        //    Image.asset('assets/neu_logo.png', fit: BoxFit.cover)
+        //    after adding the PNG to your assets folder.
+        child: CustomPaint(
+          painter: _NeuSealPainter(),
+        ),
+      ),
+    );
+  }
+}
+
+class _NeuSealPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final cx = size.width / 2;
+    final cy = size.height / 2;
+    final r = size.width / 2;
+
+    // Background fill
+    canvas.drawCircle(Offset(cx, cy), r,
+        Paint()..color = const Color(0xFF1B3A8C));
+
+    // Outer gold ring
+    canvas.drawCircle(
+        Offset(cx, cy),
+        r * 0.90,
+        Paint()
+          ..color = const Color(0xFFF5A623)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = r * 0.06);
+
+    // Inner white ring
+    canvas.drawCircle(
+        Offset(cx, cy),
+        r * 0.75,
+        Paint()
+          ..color = Colors.white
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = r * 0.03);
+
+    // White "NEU" text in center
+    final tp = TextPainter(
+      text: TextSpan(
+        text: 'NEU',
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: r * 0.30,
+          fontWeight: FontWeight.w900,
+          letterSpacing: 1,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    tp.paint(canvas, Offset(cx - tp.width / 2, cy - tp.height / 2));
+
+    // Gold dots around ring
+    final dotPaint = Paint()..color = const Color(0xFFF5A623);
+    for (int i = 0; i < 12; i++) {
+      final angle = (i / 12) * 3.14159 * 2;
+      final dx = cx + r * 0.82 * cos(angle);
+      final dy = cy + r * 0.82 * sin(angle);
+      canvas.drawCircle(Offset(dx, dy), r * 0.025, dotPaint);
+    }
+  }
+
+  double cos(double a) => _cos(a);
+  double sin(double a) => _sin(a);
+  static double _cos(double a) {
+    // simple cos approximation via dart:math
+    return _mathCos(a);
+  }
+  static double _sin(double a) {
+    return _mathSin(a);
+  }
+  static double _mathCos(double a) => _mathFunc(a, true);
+  static double _mathSin(double a) => _mathFunc(a, false);
+  static double _mathFunc(double a, bool isCos) {
+    // Taylor series — good enough for small circle dots
+    double result = isCos ? 1.0 : a;
+    double term = isCos ? 1.0 : a;
+    for (int i = 1; i <= 10; i++) {
+      int n = isCos ? 2 * i : 2 * i + 1;
+      term *= -a * a / ((n - 1) * n);
+      result += term;
+    }
+    return result;
+  }
+
+  @override
+  bool shouldRepaint(_NeuSealPainter _) => false;
 }
 
 // ─── Shared Widgets ───────────────────────────────────────────────────────────
@@ -191,17 +309,7 @@ class _SplashScreenState extends State<SplashScreen>
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Container(
-                width: 90,
-                height: 90,
-                decoration: BoxDecoration(
-                  color: AppTheme.accent.withOpacity(0.18),
-                  borderRadius: BorderRadius.circular(24),
-                  border: Border.all(color: AppTheme.accent, width: 2),
-                ),
-                child: const Icon(Icons.science_rounded,
-                    size: 48, color: AppTheme.accent),
-              ),
+              const NeuLogo(size: 90),
               const SizedBox(height: 24),
               const Text('LabTrack',
                   style: TextStyle(
@@ -210,7 +318,7 @@ class _SplashScreenState extends State<SplashScreen>
                       fontWeight: FontWeight.bold,
                       letterSpacing: 2)),
               const SizedBox(height: 8),
-              const Text('Equipment Borrowing System',
+              const Text('CEA Laboratory · New Era University',
                   style: TextStyle(
                       color: AppTheme.textLight, fontSize: 14, letterSpacing: 1)),
               const SizedBox(height: 60),
@@ -247,7 +355,7 @@ class _LoginScreenState extends State<LoginScreen> {
         child: Column(
           children: [
             const SizedBox(height: 48),
-            const Icon(Icons.science_rounded, size: 52, color: AppTheme.accent),
+            const NeuLogo(size: 64),
             const SizedBox(height: 12),
             const Text('LabTrack',
                 style: TextStyle(
@@ -256,7 +364,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     fontWeight: FontWeight.bold,
                     letterSpacing: 1.5)),
             const SizedBox(height: 4),
-            const Text('School Laboratory Management',
+            const Text('New Era University · Lab System',
                 style: TextStyle(color: AppTheme.textLight, fontSize: 13)),
             const SizedBox(height: 36),
             Expanded(
@@ -308,16 +416,26 @@ class _LoginScreenState extends State<LoginScreen> {
                           style: const TextStyle(
                               color: AppTheme.textMid, fontSize: 14)),
                       const SizedBox(height: 24),
-                      const Text('Student ID / Email',
-                          style: TextStyle(
+                      Text(
+                          _isStudent ? 'Student ID / Email' : 'Email Address',
+                          style: const TextStyle(
                               fontSize: 13,
                               fontWeight: FontWeight.w600,
                               color: AppTheme.textDark)),
                       const SizedBox(height: 8),
                       TextFormField(
-                        decoration: const InputDecoration(
-                          hintText: 'e.g. 2024-00123',
-                          prefixIcon: Icon(Icons.person_outline_rounded,
+                        keyboardType: _isStudent
+                            ? TextInputType.text
+                            : TextInputType.emailAddress,
+                        autocorrect: false,
+                        decoration: InputDecoration(
+                          hintText: _isStudent
+                              ? 'e.g. 2024-00123'
+                              : 'staff@neu.edu.ph',
+                          prefixIcon: Icon(
+                              _isStudent
+                                  ? Icons.person_outline_rounded
+                                  : Icons.email_outlined,
                               color: AppTheme.textMid),
                         ),
                       ),
@@ -584,22 +702,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
                       ],
                     ),
                   ),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 5),
-                    decoration: BoxDecoration(
-                      color: AppTheme.accent.withOpacity(0.15),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                          color: AppTheme.accent.withOpacity(0.3)),
-                    ),
-                    child: const Text('NEU',
-                        style: TextStyle(
-                            color: AppTheme.accent,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 12,
-                            letterSpacing: 1)),
-                  ),
+                  const NeuLogo(size: 40),
                 ],
               ),
             ),
@@ -669,7 +772,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
                           validator: _validateStudentId,
                           onChanged: (_) => setState(() {}),
                           decoration: InputDecoration(
-                            hintText: '19-10975-366',
+                            hintText: '25-58975-548',
                             prefixIcon: const Icon(Icons.badge_outlined,
                                 color: AppTheme.textMid),
                             suffixIcon: _studentIdCtrl.text.isNotEmpty
@@ -1131,7 +1234,7 @@ class _StudentDashboard extends StatelessWidget {
                   gradient: LinearGradient(
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
-                    colors: [AppTheme.primary, Color(0xFF0D3561)],
+                    colors: [AppTheme.primary, AppTheme.primaryDark],
                   ),
                 ),
                 padding: const EdgeInsets.fromLTRB(24, 60, 24, 20),
@@ -1535,8 +1638,10 @@ class EquipmentCatalogScreen extends StatefulWidget {
 
 class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
   String _search = '';
-  String _filter = 'All';
-  final _categories = ['All', 'Electronics', 'Optics', 'Measurement', 'Tools'];
+  // Multi-select: empty set = show all
+  final Set<String> _selectedCategories = {};
+  final _categories = ['Electronics', 'Optics', 'Measurement', 'Tools'];
+  bool _dropdownOpen = false;
 
   final _items = [
     {'name': 'Digital Multimeter', 'id': 'EQ-0042', 'cat': 'Electronics', 'qty': 5, 'available': 3},
@@ -1549,10 +1654,29 @@ class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
     {'name': 'Power Supply Unit', 'id': 'EQ-0011', 'cat': 'Electronics', 'qty': 4, 'available': 2},
   ];
 
+  String get _filterLabel {
+    if (_selectedCategories.isEmpty) return 'All Categories';
+    if (_selectedCategories.length == 1) return _selectedCategories.first;
+    return '${_selectedCategories.length} categories';
+  }
+
+  void _toggleCategory(String cat) {
+    setState(() {
+      if (_selectedCategories.contains(cat)) {
+        _selectedCategories.remove(cat);
+      } else {
+        _selectedCategories.add(cat);
+      }
+    });
+  }
+
+  void _clearFilters() => setState(() => _selectedCategories.clear());
+
   @override
   Widget build(BuildContext context) {
     final filtered = _items.where((e) {
-      final matchCat = _filter == 'All' || e['cat'] == _filter;
+      final matchCat = _selectedCategories.isEmpty ||
+          _selectedCategories.contains(e['cat']);
       final matchSearch = _search.isEmpty ||
           (e['name'] as String).toLowerCase().contains(_search.toLowerCase());
       return matchCat && matchSearch;
@@ -1567,7 +1691,9 @@ class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
             color: AppTheme.primary,
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
             child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                // Search bar
                 TextField(
                   onChanged: (v) => setState(() => _search = v),
                   style: const TextStyle(color: Colors.white),
@@ -1592,42 +1718,265 @@ class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
                   ),
                 ),
                 const SizedBox(height: 10),
-                SizedBox(
-                  height: 34,
-                  child: ListView.separated(
-                    scrollDirection: Axis.horizontal,
-                    itemCount: _categories.length,
-                    separatorBuilder: (_, __) => const SizedBox(width: 8),
-                    itemBuilder: (_, i) {
-                      final c = _categories[i];
-                      final sel = _filter == c;
-                      return GestureDetector(
-                        onTap: () => setState(() => _filter = c),
-                        child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 180),
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 16, vertical: 6),
-                          decoration: BoxDecoration(
-                            color: sel
-                                ? AppTheme.accent
-                                : Colors.white.withOpacity(0.1),
-                            borderRadius: BorderRadius.circular(20),
+                // Multi-select dropdown button
+                GestureDetector(
+                  onTap: () => setState(() => _dropdownOpen = !_dropdownOpen),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                          color: _selectedCategories.isNotEmpty
+                              ? AppTheme.accent
+                              : Colors.white.withOpacity(0.2),
+                          width: _selectedCategories.isNotEmpty ? 1.5 : 1),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.filter_list_rounded,
+                            color: AppTheme.textLight, size: 18),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            _filterLabel,
+                            style: TextStyle(
+                              color: _selectedCategories.isNotEmpty
+                                  ? AppTheme.accent
+                                  : AppTheme.textLight,
+                              fontSize: 13,
+                              fontWeight: _selectedCategories.isNotEmpty
+                                  ? FontWeight.w600
+                                  : FontWeight.normal,
+                            ),
                           ),
-                          child: Text(c,
-                              style: TextStyle(
-                                  color: sel ? Colors.white : AppTheme.textLight,
-                                  fontSize: 12,
-                                  fontWeight: sel
-                                      ? FontWeight.bold
-                                      : FontWeight.normal)),
                         ),
-                      );
-                    },
+                        // Active filter chips inline
+                        if (_selectedCategories.isNotEmpty) ...[
+                          GestureDetector(
+                            onTap: _clearFilters,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 2),
+                              decoration: BoxDecoration(
+                                  color: AppTheme.accent.withOpacity(0.2),
+                                  borderRadius: BorderRadius.circular(10)),
+                              child: const Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text('Clear',
+                                      style: TextStyle(
+                                          color: AppTheme.accent,
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.bold)),
+                                  SizedBox(width: 2),
+                                  Icon(Icons.close_rounded,
+                                      size: 12, color: AppTheme.accent),
+                                ],
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                        ],
+                        AnimatedRotation(
+                          turns: _dropdownOpen ? 0.5 : 0,
+                          duration: const Duration(milliseconds: 200),
+                          child: const Icon(Icons.keyboard_arrow_down_rounded,
+                              color: AppTheme.textLight, size: 20),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ],
             ),
           ),
+
+          // Dropdown panel (shown below header, above list)
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeInOut,
+            height: _dropdownOpen ? (_categories.length * 52.0) : 0,
+            child: Container(
+              color: Colors.white,
+              child: SingleChildScrollView(
+                physics: const NeverScrollableScrollPhysics(),
+                child: Column(
+                  children: [
+                    // "Select All" / "Clear All" row
+                    InkWell(
+                      onTap: () {
+                        setState(() {
+                          if (_selectedCategories.length ==
+                              _categories.length) {
+                            _selectedCategories.clear();
+                          } else {
+                            _selectedCategories
+                                .addAll(_categories);
+                          }
+                        });
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 10),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 20,
+                              height: 20,
+                              decoration: BoxDecoration(
+                                color: _selectedCategories.length ==
+                                        _categories.length
+                                    ? AppTheme.primary
+                                    : Colors.white,
+                                borderRadius: BorderRadius.circular(4),
+                                border: Border.all(
+                                    color: _selectedCategories.length ==
+                                            _categories.length
+                                        ? AppTheme.primary
+                                        : AppTheme.textLight),
+                              ),
+                              child: _selectedCategories.length ==
+                                      _categories.length
+                                  ? const Icon(Icons.check_rounded,
+                                      color: Colors.white, size: 14)
+                                  : null,
+                            ),
+                            const SizedBox(width: 12),
+                            const Text('Select All',
+                                style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.bold,
+                                    color: AppTheme.textDark)),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const Divider(height: 1, color: AppTheme.divider),
+                    ..._categories.map((cat) {
+                      final checked =
+                          _selectedCategories.contains(cat);
+                      return InkWell(
+                        onTap: () => _toggleCategory(cat),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 10),
+                          child: Row(
+                            children: [
+                              AnimatedContainer(
+                                duration: const Duration(milliseconds: 150),
+                                width: 20,
+                                height: 20,
+                                decoration: BoxDecoration(
+                                  color: checked
+                                      ? AppTheme.primary
+                                      : Colors.white,
+                                  borderRadius: BorderRadius.circular(4),
+                                  border: Border.all(
+                                      color: checked
+                                          ? AppTheme.primary
+                                          : AppTheme.textLight),
+                                ),
+                                child: checked
+                                    ? const Icon(Icons.check_rounded,
+                                        color: Colors.white, size: 14)
+                                    : null,
+                              ),
+                              const SizedBox(width: 12),
+                              Text(cat,
+                                  style: TextStyle(
+                                      fontSize: 13,
+                                      color: checked
+                                          ? AppTheme.primary
+                                          : AppTheme.textDark,
+                                      fontWeight: checked
+                                          ? FontWeight.w600
+                                          : FontWeight.normal)),
+                              const Spacer(),
+                              // Item count badge per category
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 8, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: checked
+                                      ? AppTheme.primary.withOpacity(0.1)
+                                      : AppTheme.surface,
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: Text(
+                                  '${_items.where((e) => e['cat'] == cat).length}',
+                                  style: TextStyle(
+                                      fontSize: 11,
+                                      color: checked
+                                          ? AppTheme.primary
+                                          : AppTheme.textMid,
+                                      fontWeight: FontWeight.w600),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    }),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          // Active filter tags row
+          if (_selectedCategories.isNotEmpty)
+            Container(
+              color: AppTheme.surface,
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Row(
+                children: [
+                  const Text('Filtered: ',
+                      style: TextStyle(
+                          fontSize: 11,
+                          color: AppTheme.textMid,
+                          fontWeight: FontWeight.w600)),
+                  Expanded(
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: _selectedCategories.map((cat) {
+                          return Container(
+                            margin: const EdgeInsets.only(right: 6),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: AppTheme.primary.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(20),
+                              border: Border.all(
+                                  color:
+                                      AppTheme.primary.withOpacity(0.3)),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(cat,
+                                    style: const TextStyle(
+                                        fontSize: 11,
+                                        color: AppTheme.primary,
+                                        fontWeight: FontWeight.w600)),
+                                const SizedBox(width: 4),
+                                GestureDetector(
+                                  onTap: () => _toggleCategory(cat),
+                                  child: const Icon(Icons.close_rounded,
+                                      size: 12, color: AppTheme.primary),
+                                ),
+                              ],
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           Expanded(
             child: ListView.separated(
               padding: const EdgeInsets.all(16),
@@ -1936,7 +2285,7 @@ class QRScanScreen extends StatelessWidget {
         children: [
           // Simulated camera feed
           Container(
-            color: const Color(0xFF0A1628),
+            color: AppTheme.primaryDark,
             child: Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -2475,7 +2824,7 @@ class ProfileScreen extends StatelessWidget {
                   const SectionHeader(title: 'Support'),
                   const SizedBox(height: 12),
                   _SettingTile(icon: Icons.help_outline_rounded, label: 'Help & FAQ'),
-                  _SettingTile(icon: Icons.info_outline_rounded, label: 'About LabTrack'),
+                  _SettingTile(icon: Icons.info_outline_rounded, label: 'About LabTrack · NEU'),
                   const SizedBox(height: 20),
                   SizedBox(
                     width: double.infinity,
@@ -2561,9 +2910,57 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     AdminReportsScreen(),
   ];
 
+  void _confirmSignOut(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Sign Out'),
+        content: const Text(
+            'Are you sure you want to sign out of your staff account?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel',
+                style: TextStyle(color: AppTheme.textMid)),
+          ),
+          ElevatedButton.icon(
+            onPressed: () {
+              Navigator.pop(context);
+              Navigator.pushReplacement(context,
+                  MaterialPageRoute(builder: (_) => const LoginScreen()));
+            },
+            icon: const Icon(Icons.logout_rounded, size: 16),
+            label: const Text('Sign Out'),
+            style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.danger),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final tabTitles = ['Dashboard', 'Requests', 'Inventory', 'Reports'];
     return Scaffold(
+      appBar: AppBar(
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const NeuLogo(size: 28),
+            const SizedBox(width: 10),
+            Text(tabTitles[_currentIndex]),
+          ],
+        ),
+        actions: [
+          IconButton(
+            tooltip: 'Sign Out',
+            icon: const Icon(Icons.logout_rounded, color: Colors.white),
+            onPressed: () => _confirmSignOut(context),
+          ),
+        ],
+      ),
       body: _pages[_currentIndex],
       bottomNavigationBar: Container(
         decoration: const BoxDecoration(
@@ -2616,19 +3013,14 @@ class _AdminHome extends StatelessWidget {
             expandedHeight: 160,
             pinned: true,
             backgroundColor: AppTheme.primary,
-            actions: [
-              IconButton(
-                  icon: const Icon(Icons.logout_rounded, color: Colors.white),
-                  onPressed: () => Navigator.pushReplacement(context,
-                      MaterialPageRoute(builder: (_) => const LoginScreen()))),
-            ],
+            automaticallyImplyLeading: false,
             flexibleSpace: FlexibleSpaceBar(
               background: Container(
                 decoration: const BoxDecoration(
                   gradient: LinearGradient(
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
-                    colors: [AppTheme.primary, Color(0xFF0D3561)],
+                    colors: [AppTheme.primary, AppTheme.primaryDark],
                   ),
                 ),
                 padding: const EdgeInsets.fromLTRB(24, 60, 24, 20),
@@ -2661,7 +3053,7 @@ class _AdminHome extends StatelessWidget {
                       ],
                     ),
                     const SizedBox(height: 4),
-                    const Text('Physics Laboratory · March 5, 2026',
+                    const Text('CEA Laboratory · New Era University',
                         style: TextStyle(
                             color: AppTheme.textLight, fontSize: 12)),
                   ],
