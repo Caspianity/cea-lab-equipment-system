@@ -1,8 +1,254 @@
 import 'package:flutter/material.dart';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+
+// ─── API Service ─────────────────────────────────────────────────────────────
+// 📱 IMPORTANT: Change this IP to your PC's local IP address.
+//    Find it by running `ipconfig` in CMD and looking for IPv4 Address.
+//    Example: http://192.168.1.5/cea_backend/api
+//    If using Android Emulator instead of a real phone, use: http://10.0.2.2/cea_backend/api
+class ApiService {
+  static const String baseUrl = 'http://192.168.1.5/cea_backend/api';
+
+  static Future<Map<String, dynamic>> login(String identifier, String password, String role) async {
+    final res = await http.post(
+      Uri.parse('$baseUrl/login.php'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'identifier': identifier, 'password': password, 'role': role}),
+    );
+    return jsonDecode(res.body);
+  }
+
+  static Future<Map<String, dynamic>> registerStudent(Map<String, dynamic> data) async {
+    final res = await http.post(
+      Uri.parse('$baseUrl/register_student.php'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode(data),
+    );
+    return jsonDecode(res.body);
+  }
+
+  static Future<List<dynamic>> getEquipment({String search = '', String category = ''}) async {
+    // Demo mode — return sample data without hitting the server
+    if (Session.isDemoMode) {
+      await Future.delayed(const Duration(milliseconds: 400));
+      var data = Session.demoEquipment;
+      if (search.isNotEmpty) {
+        data = data.where((e) =>
+          (e['equipment_name'] as String).toLowerCase().contains(search.toLowerCase())).toList();
+      }
+      if (category.isNotEmpty) {
+        data = data.where((e) => e['category'] == category).toList();
+      }
+      return data;
+    }
+    final uri = Uri.parse('$baseUrl/get_equipment.php').replace(
+      queryParameters: {
+        if (search.isNotEmpty) 'search': search,
+        if (category.isNotEmpty) 'category': category,
+      },
+    );
+    final res = await http.get(uri);
+    final body = jsonDecode(res.body);
+    return body['data'] ?? [];
+  }
+
+  static Future<Map<String, dynamic>> getEquipmentByQr(String qrCode) async {
+    if (Session.isDemoMode) {
+      await Future.delayed(const Duration(milliseconds: 300));
+      final match = Session.demoEquipment.where((e) => e['qr_code'] == qrCode).toList();
+      if (match.isEmpty) return {'success': false, 'message': 'Equipment not found.'};
+      return {'success': true, 'data': match.first};
+    }
+    final uri = Uri.parse('$baseUrl/get_equipment_by_qr.php')
+        .replace(queryParameters: {'qr_code': qrCode});
+    final res = await http.get(uri);
+    return jsonDecode(res.body);
+  }
+
+  static Future<Map<String, dynamic>> borrowEquipment(Map<String, dynamic> data) async {
+    if (Session.isDemoMode) {
+      await Future.delayed(const Duration(milliseconds: 500));
+      return {'success': true, 'message': 'Demo: Borrow request submitted!', 'transaction_id': 99};
+    }
+    final res = await http.post(
+      Uri.parse('$baseUrl/borrow_equipment.php'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode(data),
+    );
+    return jsonDecode(res.body);
+  }
+
+  static Future<Map<String, dynamic>> returnEquipment(int transactionId, String condition) async {
+    if (Session.isDemoMode) {
+      await Future.delayed(const Duration(milliseconds: 400));
+      return {'success': true, 'message': 'Demo: Equipment returned!'};
+    }
+    final res = await http.post(
+      Uri.parse('$baseUrl/return_equipment.php'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'transaction_id': transactionId, 'condition_returned': condition}),
+    );
+    return jsonDecode(res.body);
+  }
+
+  static Future<List<dynamic>> getMyBorrowings({int studentId = 0, String studentNumber = ''}) async {
+    if (Session.isDemoMode) {
+      await Future.delayed(const Duration(milliseconds: 400));
+      return Session.demoBorrowings;
+    }
+    final uri = Uri.parse('$baseUrl/get_my_borrowings.php').replace(
+      queryParameters: {
+        if (studentId > 0) 'student_id': '$studentId',
+        if (studentNumber.isNotEmpty) 'student_number': studentNumber,
+      },
+    );
+    final res = await http.get(uri);
+    final body = jsonDecode(res.body);
+    return body['data'] ?? [];
+  }
+
+  static Future<List<dynamic>> getRequests({String status = ''}) async {
+    if (Session.isDemoMode) {
+      await Future.delayed(const Duration(milliseconds: 400));
+      if (status.isEmpty || status == 'All') return Session.demoRequests;
+      return Session.demoRequests.where((e) => e['status'] == status).toList();
+    }
+    final uri = Uri.parse('$baseUrl/get_requests.php')
+        .replace(queryParameters: {'status': status});
+    final res = await http.get(uri);
+    final body = jsonDecode(res.body);
+    return body['data'] ?? [];
+  }
+
+  static Future<Map<String, dynamic>> updateRequestStatus(int transactionId, String action) async {
+    if (Session.isDemoMode) {
+      await Future.delayed(const Duration(milliseconds: 400));
+      return {'success': true, 'message': 'Demo: Status updated!'};
+    }
+    final res = await http.post(
+      Uri.parse('$baseUrl/update_request_status.php'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'transaction_id': transactionId, 'action': action}),
+    );
+    return jsonDecode(res.body);
+  }
+
+  static Future<Map<String, dynamic>> addEquipment(Map<String, dynamic> data) async {
+    final res = await http.post(
+      Uri.parse('$baseUrl/add_equipment.php'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode(data),
+    );
+    return jsonDecode(res.body);
+  }
+
+  static Future<Map<String, dynamic>> submitDamageReport(Map<String, dynamic> data) async {
+    final res = await http.post(
+      Uri.parse('$baseUrl/submit_damage_report.php'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode(data),
+    );
+    return jsonDecode(res.body);
+  }
+
+  static Future<Map<String, dynamic>> getDashboardStats() async {
+    if (Session.isDemoMode) {
+      await Future.delayed(const Duration(milliseconds: 300));
+      return {
+        'pending_requests':    2,
+        'active_loans':        2,
+        'overdue_loans':       0,
+        'total_equipment':     9,
+        'available_equipment': 7,
+        'damage_reports':      1,
+      };
+    }
+    final res = await http.get(Uri.parse('$baseUrl/get_dashboard_stats.php'));
+    final body = jsonDecode(res.body);
+    return body['data'] ?? {};
+  }
+
+  static Future<Map<String, dynamic>> updateProfile({
+    required int studentId,
+    required String name,
+    required String course,
+    required int yearLevel,
+  }) async {
+    final res = await http.post(
+      Uri.parse('$baseUrl/update_profile.php'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'student_id': studentId,
+        'name':       name,
+        'course':     course,
+        'year_level': yearLevel,
+      }),
+    );
+    return jsonDecode(res.body);
+  }
+}
+
+// ─── Session (simple in-memory user state) ───────────────────────────────────
+class Session {
+  static Map<String, dynamic>? currentUser;
+  static String? role; // 'student' or 'staff'
+  static bool isDemoMode = false;
+
+  static void set(Map<String, dynamic> user, String r, {bool demo = false}) {
+    currentUser = user;
+    role = r;
+    isDemoMode = demo;
+  }
+
+  static void clear() {
+    currentUser = null;
+    role = null;
+    isDemoMode = false;
+  }
+
+  static String get name => currentUser?['name'] ?? 'User';
+  static String get studentNumber => currentUser?['student_number'] ?? '';
+  static int get studentId => int.tryParse('${currentUser?['student_id'] ?? 0}') ?? 0;
+  static String get initials {
+    final parts = name.trim().split(' ');
+    if (parts.length >= 2) return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
+    return name.isNotEmpty ? name[0].toUpperCase() : 'U';
+  }
+
+  // ── Sample data shown when in demo mode ──────────────────────────────────
+  static final List<Map<String, dynamic>> demoEquipment = [
+    {'equipment_id': '1', 'equipment_name': 'Digital Multimeter',  'category': 'Electronics',     'qr_code': 'ELE-001', 'status': 'Available',  'location': 'Cabinet A'},
+    {'equipment_id': '2', 'equipment_name': 'Oscilloscope',         'category': 'Electronics',     'qr_code': 'ELE-002', 'status': 'Borrowed',   'location': 'Cabinet A'},
+    {'equipment_id': '3', 'equipment_name': 'Breadboard Kit',       'category': 'Electronics',     'qr_code': 'ELE-003', 'status': 'Available',  'location': 'Cabinet B'},
+    {'equipment_id': '4', 'equipment_name': 'Soldering Iron Kit',   'category': 'Tools',           'qr_code': 'TOO-001', 'status': 'Available',  'location': 'Cabinet C'},
+    {'equipment_id': '5', 'equipment_name': 'Vernier Caliper',      'category': 'Measurement',     'qr_code': 'MEA-001', 'status': 'Available',  'location': 'Cabinet D'},
+    {'equipment_id': '6', 'equipment_name': 'Micrometer',           'category': 'Measurement',     'qr_code': 'MEA-002', 'status': 'Available',  'location': 'Cabinet D'},
+    {'equipment_id': '7', 'equipment_name': 'Optical Lens Set',     'category': 'Optics',          'qr_code': 'OPT-001', 'status': 'Borrowed',   'location': 'Cabinet E'},
+    {'equipment_id': '8', 'equipment_name': 'Power Supply Unit',    'category': 'Electronics',     'qr_code': 'ELE-004', 'status': 'Available',  'location': 'Cabinet A'},
+    {'equipment_id': '9', 'equipment_name': 'Arduino Kit',          'category': 'Microcontroller', 'qr_code': 'MIC-001', 'status': 'Available',  'location': 'Cabinet B'},
+  ];
+
+  static final List<Map<String, dynamic>> demoBorrowings = [
+    {'transaction_id': '1', 'equipment_name': 'Digital Multimeter', 'qr_code': 'ELE-001', 'status': 'Approved',  'due_date': '2026-04-01', 'student_number': '2024-00001', 'borrower_name': 'Demo Student', 'quantity': 1},
+    {'transaction_id': '2', 'equipment_name': 'Breadboard Kit',     'qr_code': 'ELE-003', 'status': 'Pending',   'due_date': '2026-04-05', 'student_number': '2024-00001', 'borrower_name': 'Demo Student', 'quantity': 2},
+    {'transaction_id': '3', 'equipment_name': 'Vernier Caliper',    'qr_code': 'MEA-001', 'status': 'Returned',  'due_date': '2026-03-20', 'student_number': '2024-00001', 'borrower_name': 'Demo Student', 'quantity': 1},
+  ];
+
+  static final List<Map<String, dynamic>> demoRequests = [
+    {'transaction_id': '1', 'equipment_name': 'Digital Multimeter', 'qr_code': 'ELE-001', 'status': 'Pending',  'due_date': '2026-04-01T00:00:00', 'student_number': '2024-00123', 'borrower_name': 'Juan Santos',  'quantity': 1},
+    {'transaction_id': '2', 'equipment_name': 'Oscilloscope',        'qr_code': 'ELE-002', 'status': 'Pending',  'due_date': '2026-04-03T00:00:00', 'student_number': '2024-00145', 'borrower_name': 'Ana Reyes',    'quantity': 1},
+    {'transaction_id': '3', 'equipment_name': 'Breadboard Kit',      'qr_code': 'ELE-003', 'status': 'Approved', 'due_date': '2026-04-05T00:00:00', 'student_number': '2024-00167', 'borrower_name': 'Leo Cruz',     'quantity': 2},
+    {'transaction_id': '4', 'equipment_name': 'Soldering Iron Kit',  'qr_code': 'TOO-001', 'status': 'Approved', 'due_date': '2026-03-28T00:00:00', 'student_number': '2024-00111', 'borrower_name': 'Maria Lim',    'quantity': 1},
+    {'transaction_id': '5', 'equipment_name': 'Vernier Caliper',     'qr_code': 'MEA-001', 'status': 'Returned', 'due_date': '2026-03-20T00:00:00', 'student_number': '2024-00099', 'borrower_name': 'Carlo Bato',   'quantity': 3},
+  ];
+}
 
 void main() {
   runApp(const LabBorrowApp());
 }
+
+
 
 // ─── App Entry ───────────────────────────────────────────────────────────────
 
@@ -346,6 +592,83 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   bool _isStudent = true;
   bool _obscure = true;
+  bool _loading = false;
+  final _identifierCtrl = TextEditingController();
+  final _passwordCtrl   = TextEditingController();
+
+  @override
+  void dispose() {
+    _identifierCtrl.dispose();
+    _passwordCtrl.dispose();
+    super.dispose();
+  }
+
+  // Clear fields and reset obscure when switching tabs
+  void _switchRole(bool toStudent) {
+    setState(() {
+      _isStudent = toStudent;
+      _identifierCtrl.clear();
+      _passwordCtrl.clear();
+      _obscure = true;
+    });
+  }
+
+  Future<void> _login() async {
+    final id = _identifierCtrl.text.trim();
+    final pw = _passwordCtrl.text.trim();
+    if (id.isEmpty || pw.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please fill in all fields.'), backgroundColor: AppTheme.danger));
+      return;
+    }
+    setState(() => _loading = true);
+    try {
+      final res = await ApiService.login(id, pw, _isStudent ? 'student' : 'staff');
+      if (!mounted) return;
+      if (res['success'] == true) {
+        Session.set(res['user'] as Map<String, dynamic>, res['role'] as String);
+        Navigator.pushReplacement(context, MaterialPageRoute(
+          builder: (_) => _isStudent ? const StudentHomeScreen() : const AdminDashboardScreen()));
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(res['message'] ?? 'Login failed.'), backgroundColor: AppTheme.danger));
+      }
+    } catch (e) {
+      final msg = e.toString();
+      String userMsg;
+      if (msg.contains('SocketException') || msg.contains('Connection refused') || msg.contains('Network')) {
+        userMsg = 'Cannot reach server. Make sure:\n• Laragon is running\n• Your IP in ApiService.baseUrl is correct\n• Phone and PC are on the same Wi-Fi';
+      } else if (msg.contains('TimeoutException')) {
+        userMsg = 'Connection timed out. Check your IP address and Wi-Fi.';
+      } else if (msg.contains('FormatException') || msg.contains('SyntaxError')) {
+        userMsg = 'Server returned an error. Check your PHP files for syntax errors.';
+      } else {
+        userMsg = 'Error: $msg';
+      }
+      if (mounted) {
+        showDialog(
+          context: context,
+          builder: (_) => AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: const Row(children: [
+              Icon(Icons.wifi_off_rounded, color: AppTheme.danger),
+              SizedBox(width: 10),
+              Text('Connection Error'),
+            ]),
+            content: Text(userMsg, style: const TextStyle(fontSize: 13, height: 1.6)),
+            actions: [
+              ElevatedButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -393,12 +716,12 @@ class _LoginScreenState extends State<LoginScreen> {
                                 label: 'Student',
                                 icon: Icons.school_rounded,
                                 selected: _isStudent,
-                                onTap: () => setState(() => _isStudent = true)),
+                                onTap: () => _switchRole(true)),
                             _RoleTab(
                                 label: 'Lab Staff',
                                 icon: Icons.admin_panel_settings_rounded,
                                 selected: !_isStudent,
-                                onTap: () => setState(() => _isStudent = false)),
+                                onTap: () => _switchRole(false)),
                           ],
                         ),
                       ),
@@ -424,6 +747,7 @@ class _LoginScreenState extends State<LoginScreen> {
                               color: AppTheme.textDark)),
                       const SizedBox(height: 8),
                       TextFormField(
+                        controller: _identifierCtrl,
                         keyboardType: _isStudent
                             ? TextInputType.text
                             : TextInputType.emailAddress,
@@ -447,6 +771,7 @@ class _LoginScreenState extends State<LoginScreen> {
                               color: AppTheme.textDark)),
                       const SizedBox(height: 8),
                       TextFormField(
+                        controller: _passwordCtrl,
                         obscureText: _obscure,
                         decoration: InputDecoration(
                           hintText: '••••••••',
@@ -475,22 +800,96 @@ class _LoginScreenState extends State<LoginScreen> {
                       SizedBox(
                         width: double.infinity,
                         child: ElevatedButton(
-                          onPressed: () {
-                            if (_isStudent) {
-                              Navigator.pushReplacement(
-                                  context,
-                                  MaterialPageRoute(
-                                      builder: (_) => const StudentHomeScreen()));
-                            } else {
-                              Navigator.pushReplacement(
-                                  context,
-                                  MaterialPageRoute(
-                                      builder: (_) => const AdminDashboardScreen()));
-                            }
-                          },
-                          child: const Text('Sign In'),
+                          onPressed: _loading ? null : _login,
+                          child: _loading
+                              ? const SizedBox(width: 20, height: 20,
+                                  child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                              : const Text('Sign In'),
                         ),
                       ),
+                      const SizedBox(height: 10),
+                      // ── Test Connection ──
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton.icon(
+                          onPressed: () async {
+                            try {
+                              final res = await ApiService.getEquipment();
+                              if (!context.mounted) return;
+                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                                content: Text('✅ Connected! Found ${res.length} equipment items.'),
+                                backgroundColor: AppTheme.success,
+                                behavior: SnackBarBehavior.floating,
+                              ));
+                            } catch (e) {
+                              if (!context.mounted) return;
+                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                                content: Text('❌ Cannot connect. Current IP: ${ApiService.baseUrl}'),
+                                backgroundColor: AppTheme.danger,
+                                behavior: SnackBarBehavior.floating,
+                                duration: const Duration(seconds: 5),
+                              ));
+                            }
+                          },
+                          icon: const Icon(Icons.wifi_rounded, size: 16),
+                          label: const Text('Test Server Connection'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: AppTheme.textMid,
+                            side: const BorderSide(color: AppTheme.divider),
+                          ),
+                        ),
+                      ),
+                      // ── Demo Mode ──
+                      const SizedBox(height: 20),
+                      Row(children: const [
+                        Expanded(child: Divider(color: AppTheme.divider)),
+                        Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 10),
+                          child: Text('DEMO MODE',
+                              style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold,
+                                  color: AppTheme.textLight, letterSpacing: 1)),
+                        ),
+                        Expanded(child: Divider(color: AppTheme.divider)),
+                      ]),
+                      const SizedBox(height: 12),
+                      Row(children: [
+                        Expanded(
+                          child: _DemoButton(
+                            label: 'Student Demo',
+                            icon: Icons.school_rounded,
+                            color: AppTheme.primary,
+                            onTap: () {
+                              Session.set({
+                                'student_id':     '1',
+                                'name':           'Demo Student',
+                                'student_number': '2024-00001',
+                                'course':         'BSECE',
+                                'year_level':     3,
+                              }, 'student', demo: true);
+                              Navigator.pushReplacement(context, MaterialPageRoute(
+                                  builder: (_) => const StudentHomeScreen()));
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: _DemoButton(
+                            label: 'Staff Demo',
+                            icon: Icons.admin_panel_settings_rounded,
+                            color: AppTheme.accent,
+                            onTap: () {
+                              Session.set({
+                                'staff_id': '1',
+                                'name':     'Demo Staff',
+                                'email':    'demo@neu.edu.ph',
+                                'role':     'admin',
+                              }, 'staff', demo: true);
+                              Navigator.pushReplacement(context, MaterialPageRoute(
+                                  builder: (_) => const AdminDashboardScreen()));
+                            },
+                          ),
+                        ),
+                      ]),
                       // ── Sign Up Link (students only) ──
                       if (_isStudent) ...[
                         const SizedBox(height: 20),
@@ -521,6 +920,40 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+// ─── Demo Button Widget ───────────────────────────────────────────────────────
+
+class _DemoButton extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final Color color;
+  final VoidCallback onTap;
+  const _DemoButton({required this.label, required this.icon,
+      required this.color, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.08),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: color.withOpacity(0.3)),
+        ),
+        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+          Icon(icon, color: color, size: 22),
+          const SizedBox(height: 5),
+          Text(label,
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: color)),
+          const SizedBox(height: 2),
+          Text('Tap to enter', style: TextStyle(fontSize: 10, color: color.withOpacity(0.6))),
+        ]),
       ),
     );
   }
@@ -593,67 +1026,62 @@ class _SignUpScreenState extends State<SignUpScreen> {
     return null;
   }
 
-  void _submitSignUp() {
+  Future<void> _submitSignUp() async {
     if (_formKey.currentState!.validate()) {
       if (!_agreedToTerms) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Please agree to the Terms and Conditions'),
-            backgroundColor: AppTheme.danger,
-          ),
-        );
+          const SnackBar(content: Text('Please agree to the Terms and Conditions'), backgroundColor: AppTheme.danger));
         return;
       }
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (_) => AlertDialog(
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-          contentPadding: const EdgeInsets.fromLTRB(24, 32, 24, 24),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 72,
-                height: 72,
-                decoration: BoxDecoration(
-                  color: AppTheme.success.withOpacity(0.12),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(Icons.check_circle_rounded,
-                    color: AppTheme.success, size: 40),
-              ),
-              const SizedBox(height: 20),
-              const Text('Account Created!',
-                  style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                      color: AppTheme.textDark)),
-              const SizedBox(height: 10),
-              Text(
-                  'Welcome, ${_firstNameCtrl.text}! Your account has been created. You can now sign in to LabTrack.',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                      fontSize: 13, color: AppTheme.textMid)),
-              const SizedBox(height: 24),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: () {
-                    Navigator.pop(context);
-                    Navigator.pushReplacement(
-                        context,
-                        MaterialPageRoute(
-                            builder: (_) => const LoginScreen()));
-                  },
-                  child: const Text('Go to Sign In'),
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
+      // Show loading
+      showDialog(context: context, barrierDismissible: false,
+        builder: (_) => const Center(child: CircularProgressIndicator()));
+
+      try {
+        final res = await ApiService.registerStudent({
+          'first_name':     _firstNameCtrl.text.trim(),
+          'last_name':      _lastNameCtrl.text.trim(),
+          'email':          _emailCtrl.text.trim(),
+          'student_number': _studentIdCtrl.text.trim(),
+          'course':         _courseCtrl.text.trim(),
+          'year_level':     int.tryParse(_yearCtrl.text.trim()) ?? 1,
+          'password':       _passCtrl.text,
+        });
+        if (!mounted) return;
+        Navigator.pop(context); // close loading
+
+        if (res['success'] == true) {
+          showDialog(context: context, barrierDismissible: false,
+            builder: (_) => AlertDialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+              contentPadding: const EdgeInsets.fromLTRB(24, 32, 24, 24),
+              content: Column(mainAxisSize: MainAxisSize.min, children: [
+                Container(width: 72, height: 72,
+                  decoration: BoxDecoration(color: AppTheme.success.withOpacity(0.12), shape: BoxShape.circle),
+                  child: const Icon(Icons.check_circle_rounded, color: AppTheme.success, size: 40)),
+                const SizedBox(height: 20),
+                const Text('Account Created!', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: AppTheme.textDark)),
+                const SizedBox(height: 10),
+                Text('Welcome, ${_firstNameCtrl.text}! Your account has been created. You can now sign in to LabTrack.',
+                    textAlign: TextAlign.center, style: const TextStyle(fontSize: 13, color: AppTheme.textMid)),
+                const SizedBox(height: 24),
+                SizedBox(width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () { Navigator.pop(context); Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const LoginScreen())); },
+                    child: const Text('Go to Sign In'))),
+              ]),
+            ));
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(res['message'] ?? 'Registration failed.'), backgroundColor: AppTheme.danger));
+        }
+      } catch (e) {
+        if (mounted) {
+          Navigator.pop(context);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Cannot connect to server. Check your IP and Laragon.'), backgroundColor: AppTheme.danger));
+        }
+      }
     }
   }
 
@@ -772,7 +1200,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
                           validator: _validateStudentId,
                           onChanged: (_) => setState(() {}),
                           decoration: InputDecoration(
-                            hintText: '25-58975-548',
+                            hintText: '19-10975-366',
                             prefixIcon: const Icon(Icons.badge_outlined,
                                 color: AppTheme.textMid),
                             suffixIcon: _studentIdCtrl.text.isNotEmpty
@@ -1171,7 +1599,23 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: _pages[_currentIndex],
+      body: Column(
+        children: [
+          if (Session.isDemoMode)
+            Container(
+              width: double.infinity,
+              color: AppTheme.accent,
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: const Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                Icon(Icons.play_circle_outline_rounded, color: Colors.white, size: 14),
+                SizedBox(width: 6),
+                Text('DEMO MODE — Data is not saved to the database',
+                    style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
+              ]),
+            ),
+          Expanded(child: _pages[_currentIndex]),
+        ],
+      ),
       bottomNavigationBar: Container(
         decoration: const BoxDecoration(
           color: Colors.white,
@@ -1638,21 +2082,27 @@ class EquipmentCatalogScreen extends StatefulWidget {
 
 class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
   String _search = '';
-  // Multi-select: empty set = show all
   final Set<String> _selectedCategories = {};
-  final _categories = ['Electronics', 'Optics', 'Measurement', 'Tools'];
+  final _categories = ['Electronics', 'Optics', 'Measurement', 'Tools', 'Microcontroller'];
   bool _dropdownOpen = false;
+  bool _loading = true;
+  List<dynamic> _items = [];
 
-  final _items = [
-    {'name': 'Digital Multimeter', 'id': 'EQ-0042', 'cat': 'Electronics', 'qty': 5, 'available': 3},
-    {'name': 'Oscilloscope', 'id': 'EQ-0018', 'cat': 'Electronics', 'qty': 3, 'available': 1},
-    {'name': 'Soldering Iron Kit', 'id': 'EQ-0055', 'cat': 'Tools', 'qty': 8, 'available': 6},
-    {'name': 'Vernier Caliper', 'id': 'EQ-0031', 'cat': 'Measurement', 'qty': 10, 'available': 7},
-    {'name': 'Optical Lens Set', 'id': 'EQ-0067', 'cat': 'Optics', 'qty': 4, 'available': 4},
-    {'name': 'Breadboard Kit', 'id': 'EQ-0022', 'cat': 'Electronics', 'qty': 15, 'available': 9},
-    {'name': 'Micrometer', 'id': 'EQ-0038', 'cat': 'Measurement', 'qty': 6, 'available': 0},
-    {'name': 'Power Supply Unit', 'id': 'EQ-0011', 'cat': 'Electronics', 'qty': 4, 'available': 2},
-  ];
+  @override
+  void initState() {
+    super.initState();
+    _loadEquipment();
+  }
+
+  Future<void> _loadEquipment() async {
+    setState(() => _loading = true);
+    try {
+      final data = await ApiService.getEquipment();
+      setState(() { _items = data; _loading = false; });
+    } catch (e) {
+      setState(() => _loading = false);
+    }
+  }
 
   String get _filterLabel {
     if (_selectedCategories.isEmpty) return 'All Categories';
@@ -1662,11 +2112,8 @@ class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
 
   void _toggleCategory(String cat) {
     setState(() {
-      if (_selectedCategories.contains(cat)) {
-        _selectedCategories.remove(cat);
-      } else {
-        _selectedCategories.add(cat);
-      }
+      if (_selectedCategories.contains(cat)) _selectedCategories.remove(cat);
+      else _selectedCategories.add(cat);
     });
   }
 
@@ -1676,15 +2123,17 @@ class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
   Widget build(BuildContext context) {
     final filtered = _items.where((e) {
       final matchCat = _selectedCategories.isEmpty ||
-          _selectedCategories.contains(e['cat']);
+          _selectedCategories.contains(e['category']);
       final matchSearch = _search.isEmpty ||
-          (e['name'] as String).toLowerCase().contains(_search.toLowerCase());
+          (e['equipment_name'] as String).toLowerCase().contains(_search.toLowerCase());
       return matchCat && matchSearch;
     }).toList();
 
     return Scaffold(
       appBar: AppBar(title: const Text('Equipment Catalog')),
-      body: Column(
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : Column(
         children: [
           // Search + Filter
           Container(
@@ -1905,7 +2354,7 @@ class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
                                   borderRadius: BorderRadius.circular(10),
                                 ),
                                 child: Text(
-                                  '${_items.where((e) => e['cat'] == cat).length}',
+                                  '${_items.where((e) => e['category'] == cat).length}',
                                   style: TextStyle(
                                       fontSize: 11,
                                       color: checked
@@ -1984,13 +2433,14 @@ class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
               separatorBuilder: (_, __) => const SizedBox(height: 10),
               itemBuilder: (_, i) {
                 final e = filtered[i];
-                final avail = e['available'] as int;
+                final isAvailable = (e['status'] ?? 'Available') == 'Available';
                 return GestureDetector(
                   onTap: () => Navigator.push(
                       context,
                       MaterialPageRoute(
                           builder: (_) => BorrowRequestScreen(
-                              equipmentName: e['name'] as String))),
+                              equipmentName: e['equipment_name'] as String,
+                              equipmentId: int.tryParse('${e['equipment_id']}') ?? 0))),
                   child: Container(
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
@@ -2014,60 +2464,34 @@ class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(e['name'] as String,
+                              Text(e['equipment_name'] as String,
                                   style: const TextStyle(
                                       fontWeight: FontWeight.bold,
                                       fontSize: 14,
                                       color: AppTheme.textDark)),
                               const SizedBox(height: 2),
-                              Text('${e['id']}  •  ${e['cat']}',
+                              Text('${e['qr_code']}  •  ${e['category']}',
                                   style: const TextStyle(
                                       fontSize: 12,
                                       color: AppTheme.textMid)),
                               const SizedBox(height: 6),
                               Row(
                                 children: [
-                                  Container(
-                                    width: 80,
-                                    height: 5,
-                                    decoration: BoxDecoration(
-                                      color: AppTheme.divider,
-                                      borderRadius: BorderRadius.circular(10),
-                                    ),
-                                    child: FractionallySizedBox(
-                                      alignment: Alignment.centerLeft,
-                                      widthFactor: avail /
-                                          (e['qty'] as int),
-                                      child: Container(
-                                        decoration: BoxDecoration(
-                                          color: avail > 0
-                                              ? AppTheme.success
-                                              : AppTheme.danger,
-                                          borderRadius:
-                                              BorderRadius.circular(10),
-                                        ),
-                                      ),
-                                    ),
+                                  StatusBadge(
+                                    label: e['status'] ?? 'Available',
+                                    color: isAvailable ? AppTheme.success : AppTheme.danger,
                                   ),
-                                  const SizedBox(width: 8),
-                                  Text('$avail/${e['qty']} available',
-                                      style: TextStyle(
-                                          fontSize: 11,
-                                          color: avail > 0
-                                              ? AppTheme.success
-                                              : AppTheme.danger,
-                                          fontWeight: FontWeight.w600)),
                                 ],
                               ),
                             ],
                           ),
                         ),
                         Icon(
-                            avail > 0
+                            isAvailable
                                 ? Icons.arrow_forward_ios_rounded
                                 : Icons.block_rounded,
                             size: 16,
-                            color: avail > 0
+                            color: isAvailable
                                 ? AppTheme.accent
                                 : AppTheme.danger),
                       ],
@@ -2087,7 +2511,8 @@ class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
 
 class BorrowRequestScreen extends StatefulWidget {
   final String? equipmentName;
-  const BorrowRequestScreen({super.key, this.equipmentName});
+  final int equipmentId;
+  const BorrowRequestScreen({super.key, this.equipmentName, this.equipmentId = 0});
   @override
   State<BorrowRequestScreen> createState() => _BorrowRequestScreenState();
 }
@@ -2095,6 +2520,77 @@ class BorrowRequestScreen extends StatefulWidget {
 class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
   DateTime? _returnDate;
   int _qty = 1;
+  bool _loading = false;
+  final _nameCtrl    = TextEditingController();
+  final _idCtrl      = TextEditingController();
+  final _subjectCtrl = TextEditingController();
+  final _purposeCtrl = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    // Pre-fill from session if available
+    _nameCtrl.text = Session.name;
+    _idCtrl.text   = Session.studentNumber;
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _idCtrl.dispose();
+    _subjectCtrl.dispose();
+    _purposeCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submitRequest() async {
+    if (widget.equipmentId == 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No equipment selected.'), backgroundColor: AppTheme.danger));
+      return;
+    }
+    if (_returnDate == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please select a return date.'), backgroundColor: AppTheme.danger));
+      return;
+    }
+    setState(() => _loading = true);
+    try {
+      final res = await ApiService.borrowEquipment({
+        'student_id':     Session.studentId,
+        'equipment_id':   widget.equipmentId,
+        'borrower_name':  _nameCtrl.text.trim(),
+        'student_number': _idCtrl.text.trim(),
+        'subject':        _subjectCtrl.text.trim(),
+        'quantity':       _qty,
+        'borrow_date':    DateTime.now().toIso8601String(),
+        'due_date':       _returnDate!.toIso8601String(),
+        'purpose':        _purposeCtrl.text.trim(),
+      });
+      if (!mounted) return;
+      if (res['success'] == true) {
+        showDialog(context: context, barrierDismissible: false,
+          builder: (_) => AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            icon: const Icon(Icons.check_circle_rounded, color: AppTheme.success, size: 52),
+            title: const Text('Request Submitted!'),
+            content: const Text('Your borrowing request has been submitted and is awaiting staff approval.',
+                textAlign: TextAlign.center),
+            actions: [ElevatedButton(
+              onPressed: () { Navigator.pop(context); Navigator.pop(context); },
+              child: const Text('Done'))],
+          ));
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(res['message'] ?? 'Failed to submit.'), backgroundColor: AppTheme.danger));
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Cannot connect to server.'), backgroundColor: AppTheme.danger));
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -2119,23 +2615,16 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
                     decoration: BoxDecoration(
                         color: AppTheme.primary.withOpacity(0.1),
                         borderRadius: BorderRadius.circular(12)),
-                    child: const Icon(Icons.science_outlined,
-                        color: AppTheme.primary),
+                    child: const Icon(Icons.science_outlined, color: AppTheme.primary),
                   ),
                   const SizedBox(width: 14),
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                          widget.equipmentName ?? 'Select Equipment',
-                          style: const TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 15,
-                              color: AppTheme.textDark)),
+                      Text(widget.equipmentName ?? 'Select Equipment',
+                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: AppTheme.textDark)),
                       const SizedBox(height: 2),
-                      const Text('Lab Equipment',
-                          style: TextStyle(
-                              fontSize: 12, color: AppTheme.textMid)),
+                      const Text('Lab Equipment', style: TextStyle(fontSize: 12, color: AppTheme.textMid)),
                     ],
                   )
                 ],
@@ -2144,19 +2633,15 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
             const SizedBox(height: 20),
             _FieldLabel('Borrower Name'),
             const SizedBox(height: 8),
-            const TextField(
-                decoration: InputDecoration(hintText: 'Juan Santos')),
+            TextField(controller: _nameCtrl, decoration: const InputDecoration(hintText: 'Juan Santos')),
             const SizedBox(height: 16),
             _FieldLabel('Student ID'),
             const SizedBox(height: 8),
-            const TextField(
-                decoration: InputDecoration(hintText: '2024-00123')),
+            TextField(controller: _idCtrl, decoration: const InputDecoration(hintText: '2024-00123')),
             const SizedBox(height: 16),
             _FieldLabel('Subject / Section'),
             const SizedBox(height: 8),
-            const TextField(
-                decoration:
-                    InputDecoration(hintText: 'PHYS101 - Sec A')),
+            TextField(controller: _subjectCtrl, decoration: const InputDecoration(hintText: 'PHYS101 - Sec A')),
             const SizedBox(height: 16),
             _FieldLabel('Quantity'),
             const SizedBox(height: 8),
@@ -2169,18 +2654,12 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
               child: Row(
                 children: [
                   IconButton(
-                      onPressed: () =>
-                          setState(() => _qty = (_qty - 1).clamp(1, 10)),
+                      onPressed: () => setState(() => _qty = (_qty - 1).clamp(1, 10)),
                       icon: const Icon(Icons.remove_rounded)),
-                  Expanded(
-                      child: Center(
-                          child: Text('$_qty',
-                              style: const TextStyle(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.bold)))),
+                  Expanded(child: Center(child: Text('$_qty',
+                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)))),
                   IconButton(
-                      onPressed: () =>
-                          setState(() => _qty = (_qty + 1).clamp(1, 10)),
+                      onPressed: () => setState(() => _qty = (_qty + 1).clamp(1, 10)),
                       icon: const Icon(Icons.add_rounded)),
                 ],
               ),
@@ -2198,25 +2677,21 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
                 if (d != null) setState(() => _returnDate = d);
               },
               child: Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 16, vertical: 14),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                 decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(color: AppTheme.divider)),
                 child: Row(
                   children: [
-                    const Icon(Icons.calendar_today_rounded,
-                        color: AppTheme.textMid, size: 18),
+                    const Icon(Icons.calendar_today_rounded, color: AppTheme.textMid, size: 18),
                     const SizedBox(width: 12),
                     Text(
                         _returnDate == null
                             ? 'Select return date'
                             : '${_returnDate!.month}/${_returnDate!.day}/${_returnDate!.year}',
                         style: TextStyle(
-                            color: _returnDate == null
-                                ? AppTheme.textLight
-                                : AppTheme.textDark,
+                            color: _returnDate == null ? AppTheme.textLight : AppTheme.textDark,
                             fontSize: 14)),
                   ],
                 ),
@@ -2226,37 +2701,19 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
             _FieldLabel('Purpose / Notes'),
             const SizedBox(height: 8),
             TextField(
+              controller: _purposeCtrl,
               maxLines: 3,
-              decoration: const InputDecoration(
-                  hintText: 'Describe the purpose of borrowing...'),
+              decoration: const InputDecoration(hintText: 'Describe the purpose of borrowing...'),
             ),
             const SizedBox(height: 28),
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
-                onPressed: () {
-                  showDialog(
-                      context: context,
-                      builder: (_) => AlertDialog(
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(20)),
-                            icon: const Icon(Icons.check_circle_rounded,
-                                color: AppTheme.success, size: 52),
-                            title: const Text('Request Submitted!'),
-                            content: const Text(
-                                'Your borrowing request has been submitted and is awaiting staff approval.',
-                                textAlign: TextAlign.center),
-                            actions: [
-                              ElevatedButton(
-                                  onPressed: () {
-                                    Navigator.pop(context);
-                                    Navigator.pop(context);
-                                  },
-                                  child: const Text('Done'))
-                            ],
-                          ));
-                },
-                icon: const Icon(Icons.send_rounded),
+                onPressed: _loading ? null : _submitRequest,
+                icon: _loading
+                    ? const SizedBox(width: 16, height: 16,
+                        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                    : const Icon(Icons.send_rounded),
                 label: const Text('Submit Request'),
               ),
             ),
@@ -2443,11 +2900,51 @@ class _ScanModeBtn extends StatelessWidget {
 
 // ─── My Borrowings Screen ─────────────────────────────────────────────────────
 
-class MyBorrowingsScreen extends StatelessWidget {
+class MyBorrowingsScreen extends StatefulWidget {
   const MyBorrowingsScreen({super.key});
+  @override
+  State<MyBorrowingsScreen> createState() => _MyBorrowingsScreenState();
+}
+
+class _MyBorrowingsScreenState extends State<MyBorrowingsScreen> {
+  bool _loading = true;
+  List<dynamic> _all = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    try {
+      final data = await ApiService.getMyBorrowings(
+          studentId: Session.studentId, studentNumber: Session.studentNumber);
+      setState(() { _all = data; _loading = false; });
+    } catch (_) {
+      setState(() => _loading = false);
+    }
+  }
+
+  Color _statusColor(String s) {
+    switch (s) {
+      case 'Approved': return AppTheme.success;
+      case 'Pending':  return AppTheme.accent;
+      case 'Returned': return AppTheme.textMid;
+      case 'Rejected': return AppTheme.danger;
+      default:         return AppTheme.textMid;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
+    if (_loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+
+    final active   = _all.where((e) => e['status'] == 'Approved').toList();
+    final pending  = _all.where((e) => e['status'] == 'Pending').toList();
+    final history  = _all.where((e) => e['status'] == 'Returned' || e['status'] == 'Rejected').toList();
+
     return DefaultTabController(
       length: 3,
       child: Scaffold(
@@ -2457,18 +2954,14 @@ class MyBorrowingsScreen extends StatelessWidget {
             indicatorColor: AppTheme.accent,
             labelColor: Colors.white,
             unselectedLabelColor: AppTheme.textLight,
-            tabs: [
-              Tab(text: 'Active'),
-              Tab(text: 'Pending'),
-              Tab(text: 'History'),
-            ],
+            tabs: [Tab(text: 'Active'), Tab(text: 'Pending'), Tab(text: 'History')],
           ),
         ),
         body: TabBarView(
           children: [
-            _BorrowList(items: _activeItems),
-            _BorrowList(items: _pendingItems),
-            _BorrowList(items: _historyItems),
+            _LiveBorrowList(items: active, statusColorFn: _statusColor, onRefresh: _load),
+            _LiveBorrowList(items: pending, statusColorFn: _statusColor, onRefresh: _load),
+            _LiveBorrowList(items: history, statusColorFn: _statusColor, onRefresh: _load),
           ],
         ),
       ),
@@ -2476,86 +2969,70 @@ class MyBorrowingsScreen extends StatelessWidget {
   }
 }
 
-const _activeItems = [
-  {'name': 'Digital Multimeter', 'id': 'EQ-0042', 'due': 'Mar 5, 5:00 PM', 'status': 'Due Soon', 'statusColor': 0xFFFFB703},
-  {'name': 'Oscilloscope', 'id': 'EQ-0018', 'due': 'Mar 7, 5:00 PM', 'status': 'Active', 'statusColor': 0xFF06D6A0},
-];
-const _pendingItems = [
-  {'name': 'Soldering Iron Kit', 'id': 'EQ-0055', 'due': 'Mar 8, 5:00 PM', 'status': 'Pending', 'statusColor': 0xFF00B4D8},
-];
-const _historyItems = [
-  {'name': 'Breadboard Kit', 'id': 'EQ-0022', 'due': 'Feb 28, 5:00 PM', 'status': 'Returned', 'statusColor': 0xFF9EB3C2},
-  {'name': 'Vernier Caliper', 'id': 'EQ-0031', 'due': 'Feb 20, 5:00 PM', 'status': 'Returned', 'statusColor': 0xFF9EB3C2},
-];
-
-class _BorrowList extends StatelessWidget {
-  final List<Map<String, dynamic>> items;
-  const _BorrowList({required this.items});
+class _LiveBorrowList extends StatelessWidget {
+  final List<dynamic> items;
+  final Color Function(String) statusColorFn;
+  final VoidCallback onRefresh;
+  const _LiveBorrowList({required this.items, required this.statusColorFn, required this.onRefresh});
 
   @override
   Widget build(BuildContext context) {
     if (items.isEmpty) {
-      return const Center(
-          child: Text('No items', style: TextStyle(color: AppTheme.textMid)));
+      return Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+        const Icon(Icons.inbox_rounded, size: 48, color: AppTheme.textLight),
+        const SizedBox(height: 8),
+        const Text('No items', style: TextStyle(color: AppTheme.textMid)),
+        const SizedBox(height: 12),
+        TextButton.icon(onPressed: onRefresh, icon: const Icon(Icons.refresh), label: const Text('Refresh')),
+      ]));
     }
-    return ListView.separated(
-      padding: const EdgeInsets.all(16),
-      itemCount: items.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 10),
-      itemBuilder: (_, i) {
-        final e = items[i];
-        return Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-              color: Colors.white, borderRadius: BorderRadius.circular(16)),
-          child: Column(
-            children: [
-              Row(
-                children: [
-                  Container(
-                    width: 46,
-                    height: 46,
-                    decoration: BoxDecoration(
-                        color: AppTheme.primary.withOpacity(0.08),
-                        borderRadius: BorderRadius.circular(12)),
-                    child: const Icon(Icons.science_outlined,
-                        color: AppTheme.primary),
-                  ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(e['name']!,
-                            style: const TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 14,
-                                color: AppTheme.textDark)),
-                        Text('${e['id']}  •  Due: ${e['due']}',
-                            style: const TextStyle(
-                                fontSize: 12, color: AppTheme.textMid)),
-                      ],
-                    ),
-                  ),
-                  StatusBadge(
-                      label: e['status']!,
-                      color: Color(e['statusColor']!)),
-                ],
-              ),
-              if (e['status'] == 'Active' || e['status'] == 'Due Soon') ...[
-                const SizedBox(height: 12),
-                const Divider(color: AppTheme.divider, height: 1),
-                const SizedBox(height: 10),
+    return RefreshIndicator(
+      onRefresh: () async => onRefresh(),
+      child: ListView.separated(
+        padding: const EdgeInsets.all(16),
+        itemCount: items.length,
+        separatorBuilder: (_, __) => const SizedBox(height: 10),
+        itemBuilder: (_, i) {
+          final e = items[i];
+          final status = e['status'] ?? 'Pending';
+          final dueDate = e['due_date'] ?? '';
+          final txId = int.tryParse('${e['transaction_id']}') ?? 0;
+          return Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16)),
+            child: Column(
+              children: [
                 Row(
                   children: [
+                    Container(
+                      width: 46, height: 46,
+                      decoration: BoxDecoration(
+                          color: AppTheme.primary.withOpacity(0.08),
+                          borderRadius: BorderRadius.circular(12)),
+                      child: const Icon(Icons.science_outlined, color: AppTheme.primary),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Text(e['equipment_name'] ?? '',
+                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppTheme.textDark)),
+                        Text('${e['qr_code'] ?? ''}  •  Due: $dueDate',
+                            style: const TextStyle(fontSize: 12, color: AppTheme.textMid)),
+                      ]),
+                    ),
+                    StatusBadge(label: status, color: statusColorFn(status)),
+                  ],
+                ),
+                if (status == 'Approved') ...[
+                  const SizedBox(height: 12),
+                  const Divider(color: AppTheme.divider, height: 1),
+                  const SizedBox(height: 10),
+                  Row(children: [
                     Expanded(
                       child: OutlinedButton.icon(
-                        onPressed: () => Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                                builder: (_) => const DamageReportScreen())),
-                        icon: const Icon(Icons.report_problem_outlined,
-                            size: 16),
+                        onPressed: () => Navigator.push(context,
+                            MaterialPageRoute(builder: (_) => const DamageReportScreen())),
+                        icon: const Icon(Icons.report_problem_outlined, size: 16),
                         label: const Text('Report'),
                         style: OutlinedButton.styleFrom(
                             foregroundColor: AppTheme.warning,
@@ -2565,25 +3042,39 @@ class _BorrowList extends StatelessWidget {
                     const SizedBox(width: 10),
                     Expanded(
                       child: ElevatedButton.icon(
-                        onPressed: () => Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                                builder: (_) => const QRScanScreen())),
-                        icon: const Icon(Icons.qr_code_scanner_rounded,
-                            size: 16),
+                        onPressed: () async {
+                          final confirm = await showDialog<bool>(context: context,
+                            builder: (_) => AlertDialog(
+                              title: const Text('Return Equipment'),
+                              content: const Text('Confirm return of this equipment?'),
+                              actions: [
+                                TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+                                ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('Return')),
+                              ],
+                            ));
+                          if (confirm == true) {
+                            try {
+                              await ApiService.returnEquipment(txId, 'Good');
+                              onRefresh();
+                            } catch (_) {}
+                          }
+                        },
+                        icon: const Icon(Icons.check_circle_outline_rounded, size: 16),
                         label: const Text('Return'),
                       ),
                     ),
-                  ],
-                ),
+                  ]),
+                ],
               ],
-            ],
-          ),
-        );
-      },
+            ),
+          );
+        },
+      ),
     );
   }
 }
+
+
 
 // ─── Damage Report Screen ─────────────────────────────────────────────────────
 
@@ -2595,6 +3086,49 @@ class DamageReportScreen extends StatefulWidget {
 
 class _DamageReportScreenState extends State<DamageReportScreen> {
   String? _severity;
+  String? _selectedEquipmentId;
+  bool _loading = false;
+  final _descCtrl = TextEditingController();
+
+  @override
+  void dispose() { _descCtrl.dispose(); super.dispose(); }
+
+  Future<void> _submit() async {
+    if (_descCtrl.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please describe the damage.'), backgroundColor: AppTheme.danger));
+      return;
+    }
+    setState(() => _loading = true);
+    try {
+      final res = await ApiService.submitDamageReport({
+        'equipment_id': int.tryParse(_selectedEquipmentId ?? '0') ?? 0,
+        'student_id':   Session.studentId,
+        'description':  '${_severity ?? 'Minor'}: ${_descCtrl.text.trim()}',
+      });
+      if (!mounted) return;
+      if (res['success'] == true) {
+        showDialog(context: context, barrierDismissible: false,
+          builder: (_) => AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            icon: const Icon(Icons.check_circle_rounded, color: AppTheme.success, size: 52),
+            title: const Text('Report Submitted'),
+            content: const Text('Your damage report has been submitted. Lab staff will review it shortly.', textAlign: TextAlign.center),
+            actions: [ElevatedButton(
+              onPressed: () { Navigator.pop(context); Navigator.pop(context); },
+              child: const Text('OK'))],
+          ));
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(res['message'] ?? 'Failed.'), backgroundColor: AppTheme.danger));
+      }
+    } catch (_) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Cannot connect to server.'), backgroundColor: AppTheme.danger));
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -2724,29 +3258,11 @@ class _DamageReportScreenState extends State<DamageReportScreen> {
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
-                onPressed: () {
-                  showDialog(
-                      context: context,
-                      builder: (_) => AlertDialog(
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(20)),
-                            icon: const Icon(Icons.check_circle_rounded,
-                                color: AppTheme.success, size: 52),
-                            title: const Text('Report Submitted'),
-                            content: const Text(
-                                'Your damage report has been submitted. Lab staff will review it shortly.',
-                                textAlign: TextAlign.center),
-                            actions: [
-                              ElevatedButton(
-                                  onPressed: () {
-                                    Navigator.pop(context);
-                                    Navigator.pop(context);
-                                  },
-                                  child: const Text('OK'))
-                            ],
-                          ));
-                },
-                icon: const Icon(Icons.send_rounded),
+                onPressed: _loading ? null : _submit,
+                icon: _loading
+                    ? const SizedBox(width: 16, height: 16,
+                        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                    : const Icon(Icons.send_rounded),
                 label: const Text('Submit Report'),
                 style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
               ),
@@ -2763,6 +3279,34 @@ class _DamageReportScreenState extends State<DamageReportScreen> {
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({super.key});
 
+  void _confirmSignOut(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Sign Out'),
+        content: const Text('Are you sure you want to sign out?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel', style: TextStyle(color: AppTheme.textMid)),
+          ),
+          ElevatedButton.icon(
+            onPressed: () {
+              Session.clear();
+              Navigator.pop(context);
+              Navigator.pushReplacement(context,
+                  MaterialPageRoute(builder: (_) => const LoginScreen()));
+            },
+            icon: const Icon(Icons.logout_rounded, size: 16),
+            label: const Text('Sign Out'),
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -2770,6 +3314,7 @@ class ProfileScreen extends StatelessWidget {
       body: SingleChildScrollView(
         child: Column(
           children: [
+            // ── Header ──
             Container(
               color: AppTheme.primary,
               padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
@@ -2779,58 +3324,91 @@ class ProfileScreen extends StatelessWidget {
                     CircleAvatar(
                       radius: 40,
                       backgroundColor: AppTheme.accent.withOpacity(0.2),
-                      child: const Text('JS',
-                          style: TextStyle(
+                      child: Text(Session.initials,
+                          style: const TextStyle(
                               color: AppTheme.accent,
                               fontSize: 28,
                               fontWeight: FontWeight.bold)),
                     ),
                     const SizedBox(height: 12),
-                    const Text('Juan Santos',
-                        style: TextStyle(
+                    Text(Session.name,
+                        style: const TextStyle(
                             color: Colors.white,
                             fontSize: 20,
                             fontWeight: FontWeight.bold)),
                     const SizedBox(height: 4),
-                    const Text('2024-00123  •  BSECE',
-                        style:
-                            TextStyle(color: AppTheme.textLight, fontSize: 13)),
+                    Text(
+                      '${Session.studentNumber}  •  ${Session.currentUser?['course'] ?? 'CEA'}',
+                      style: const TextStyle(color: AppTheme.textLight, fontSize: 13),
+                    ),
                     const SizedBox(height: 12),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        _ProfileStat(label: 'Total\nBorrowed', value: '14'),
-                        Container(width: 1, height: 32, color: Colors.white24, margin: const EdgeInsets.symmetric(horizontal: 20)),
-                        _ProfileStat(label: 'Active\nLoans', value: '2'),
-                        Container(width: 1, height: 32, color: Colors.white24, margin: const EdgeInsets.symmetric(horizontal: 20)),
-                        _ProfileStat(label: 'Late\nReturns', value: '0'),
+                        const _ProfileStat(label: 'Total\nBorrowed', value: '—'),
+                        Container(width: 1, height: 32, color: Colors.white24,
+                            margin: const EdgeInsets.symmetric(horizontal: 20)),
+                        const _ProfileStat(label: 'Active\nLoans', value: '—'),
+                        Container(width: 1, height: 32, color: Colors.white24,
+                            margin: const EdgeInsets.symmetric(horizontal: 20)),
+                        const _ProfileStat(label: 'Late\nReturns', value: '0'),
                       ],
                     ),
                   ],
                 ),
               ),
             ),
+
             Padding(
               padding: const EdgeInsets.all(20),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // ── Account Settings ──
                   const SectionHeader(title: 'Account Settings'),
                   const SizedBox(height: 12),
-                  _SettingTile(icon: Icons.person_outline_rounded, label: 'Edit Profile'),
-                  _SettingTile(icon: Icons.lock_outline_rounded, label: 'Change Password'),
-                  _SettingTile(icon: Icons.notifications_outlined, label: 'Notifications'),
+                  _SettingTile(
+                    icon: Icons.person_outline_rounded,
+                    label: 'Edit Profile',
+                    onTap: () => Navigator.push(context,
+                        MaterialPageRoute(builder: (_) => const EditProfileScreen())),
+                  ),
+                  _SettingTile(
+                    icon: Icons.lock_outline_rounded,
+                    label: 'Change Password',
+                    onTap: () => Navigator.push(context,
+                        MaterialPageRoute(builder: (_) => const ChangePasswordScreen())),
+                  ),
+                  _SettingTile(
+                    icon: Icons.notifications_outlined,
+                    label: 'Notifications',
+                    onTap: () => Navigator.push(context,
+                        MaterialPageRoute(builder: (_) => const NotificationsSettingsScreen())),
+                  ),
                   const SizedBox(height: 20),
+
+                  // ── Support ──
                   const SectionHeader(title: 'Support'),
                   const SizedBox(height: 12),
-                  _SettingTile(icon: Icons.help_outline_rounded, label: 'Help & FAQ'),
-                  _SettingTile(icon: Icons.info_outline_rounded, label: 'About LabTrack · NEU'),
+                  _SettingTile(
+                    icon: Icons.help_outline_rounded,
+                    label: 'Help & FAQ',
+                    onTap: () => Navigator.push(context,
+                        MaterialPageRoute(builder: (_) => const HelpFaqScreen())),
+                  ),
+                  _SettingTile(
+                    icon: Icons.info_outline_rounded,
+                    label: 'About LabTrack · NEU',
+                    onTap: () => Navigator.push(context,
+                        MaterialPageRoute(builder: (_) => const AboutScreen())),
+                  ),
                   const SizedBox(height: 20),
+
+                  // ── Sign Out ──
                   SizedBox(
                     width: double.infinity,
                     child: OutlinedButton.icon(
-                      onPressed: () => Navigator.pushReplacement(context,
-                          MaterialPageRoute(builder: (_) => const LoginScreen())),
+                      onPressed: () => _confirmSignOut(context),
                       icon: const Icon(Icons.logout_rounded),
                       label: const Text('Sign Out'),
                       style: OutlinedButton.styleFrom(
@@ -2845,6 +3423,775 @@ class ProfileScreen extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+// ─── Edit Profile Screen ──────────────────────────────────────────────────────
+
+class EditProfileScreen extends StatefulWidget {
+  const EditProfileScreen({super.key});
+  @override
+  State<EditProfileScreen> createState() => _EditProfileScreenState();
+}
+
+class _EditProfileScreenState extends State<EditProfileScreen> {
+  late TextEditingController _nameCtrl;
+  late TextEditingController _courseCtrl;
+  late TextEditingController _yearCtrl;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _nameCtrl   = TextEditingController(text: Session.name);
+    _courseCtrl = TextEditingController(text: Session.currentUser?['course'] ?? '');
+    _yearCtrl   = TextEditingController(text: '${Session.currentUser?['year_level'] ?? ''}');
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _courseCtrl.dispose();
+    _yearCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final name      = _nameCtrl.text.trim();
+    final course    = _courseCtrl.text.trim();
+    final yearLevel = int.tryParse(_yearCtrl.text.trim()) ?? 1;
+
+    if (name.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Name cannot be empty.'), backgroundColor: AppTheme.danger));
+      return;
+    }
+
+    setState(() => _saving = true);
+    try {
+      final res = await ApiService.updateProfile(
+        studentId: Session.studentId,
+        name:      name,
+        course:    course,
+        yearLevel: yearLevel,
+      );
+      if (!mounted) return;
+
+      if (res['success'] == true) {
+        // Update local session so UI reflects changes immediately
+        if (Session.currentUser != null) {
+          Session.currentUser!['name']       = name;
+          Session.currentUser!['course']     = course;
+          Session.currentUser!['year_level'] = yearLevel;
+        }
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Profile updated successfully!'),
+            backgroundColor: AppTheme.success,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        Navigator.pop(context);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(res['message'] ?? 'Update failed.'),
+            backgroundColor: AppTheme.danger,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Cannot connect to server.'),
+            backgroundColor: AppTheme.danger,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Edit Profile')),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          children: [
+            // Avatar
+            Center(
+              child: Stack(
+                children: [
+                  CircleAvatar(
+                    radius: 48,
+                    backgroundColor: AppTheme.accent.withOpacity(0.15),
+                    child: Text(Session.initials,
+                        style: const TextStyle(
+                            color: AppTheme.accent,
+                            fontSize: 34,
+                            fontWeight: FontWeight.bold)),
+                  ),
+                  Positioned(
+                    bottom: 0, right: 0,
+                    child: Container(
+                      width: 32, height: 32,
+                      decoration: const BoxDecoration(
+                          color: AppTheme.primary, shape: BoxShape.circle),
+                      child: const Icon(Icons.camera_alt_rounded,
+                          color: Colors.white, size: 16),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 28),
+
+            // Student ID (read-only)
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                  color: AppTheme.surface,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppTheme.divider)),
+              child: Row(children: [
+                const Icon(Icons.badge_outlined, color: AppTheme.textMid, size: 20),
+                const SizedBox(width: 12),
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Text('Student ID', style: TextStyle(fontSize: 11, color: AppTheme.textMid)),
+                  Text(Session.studentNumber,
+                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppTheme.textDark)),
+                ]),
+                const Spacer(),
+                const StatusBadge(label: 'Read-only', color: AppTheme.textLight),
+              ]),
+            ),
+            const SizedBox(height: 16),
+
+            _FieldLabel('Full Name'),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _nameCtrl,
+              textCapitalization: TextCapitalization.words,
+              decoration: const InputDecoration(
+                  hintText: 'e.g. Juan Santos',
+                  prefixIcon: Icon(Icons.person_outline_rounded, color: AppTheme.textMid)),
+            ),
+            const SizedBox(height: 16),
+
+            _FieldLabel('Course'),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _courseCtrl,
+              textCapitalization: TextCapitalization.characters,
+              decoration: const InputDecoration(
+                  hintText: 'e.g. BSECE',
+                  prefixIcon: Icon(Icons.school_outlined, color: AppTheme.textMid)),
+            ),
+            const SizedBox(height: 16),
+
+            _FieldLabel('Year Level'),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _yearCtrl,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                  hintText: 'e.g. 3',
+                  prefixIcon: Icon(Icons.calendar_today_outlined, color: AppTheme.textMid)),
+            ),
+            const SizedBox(height: 32),
+
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _saving ? null : _save,
+                icon: _saving
+                    ? const SizedBox(width: 16, height: 16,
+                        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                    : const Icon(Icons.save_rounded),
+                label: const Text('Save Changes'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Change Password Screen ───────────────────────────────────────────────────
+
+class ChangePasswordScreen extends StatefulWidget {
+  const ChangePasswordScreen({super.key});
+  @override
+  State<ChangePasswordScreen> createState() => _ChangePasswordScreenState();
+}
+
+class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
+  final _currentCtrl = TextEditingController();
+  final _newCtrl     = TextEditingController();
+  final _confirmCtrl = TextEditingController();
+  bool _obscureCurrent = true;
+  bool _obscureNew     = true;
+  bool _obscureConfirm = true;
+  bool _saving = false;
+
+  @override
+  void dispose() {
+    _currentCtrl.dispose();
+    _newCtrl.dispose();
+    _confirmCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (_currentCtrl.text.isEmpty || _newCtrl.text.isEmpty || _confirmCtrl.text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please fill in all fields.'), backgroundColor: AppTheme.danger));
+      return;
+    }
+    if (_newCtrl.text.length < 8) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('New password must be at least 8 characters.'), backgroundColor: AppTheme.danger));
+      return;
+    }
+    if (_newCtrl.text != _confirmCtrl.text) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('New passwords do not match.'), backgroundColor: AppTheme.danger));
+      return;
+    }
+    setState(() => _saving = true);
+    await Future.delayed(const Duration(milliseconds: 700));
+    if (!mounted) return;
+    setState(() => _saving = false);
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        icon: const Icon(Icons.check_circle_rounded, color: AppTheme.success, size: 52),
+        title: const Text('Password Changed!'),
+        content: const Text('Your password has been updated successfully.',
+            textAlign: TextAlign.center),
+        actions: [
+          ElevatedButton(
+            onPressed: () { Navigator.pop(context); Navigator.pop(context); },
+            child: const Text('Done'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _passwordField({
+    required TextEditingController controller,
+    required String label,
+    required String hint,
+    required bool obscure,
+    required VoidCallback onToggle,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _FieldLabel(label),
+        const SizedBox(height: 8),
+        TextField(
+          controller: controller,
+          obscureText: obscure,
+          decoration: InputDecoration(
+            hintText: hint,
+            prefixIcon: const Icon(Icons.lock_outline_rounded, color: AppTheme.textMid),
+            suffixIcon: GestureDetector(
+              onTap: onToggle,
+              child: Icon(
+                  obscure ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+                  color: AppTheme.textMid),
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Change Password')),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Info banner
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                  color: AppTheme.primary.withOpacity(0.07),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppTheme.primary.withOpacity(0.15))),
+              child: const Row(children: [
+                Icon(Icons.shield_outlined, color: AppTheme.primary, size: 20),
+                SizedBox(width: 10),
+                Expanded(child: Text(
+                    'Use a strong password with at least 8 characters.',
+                    style: TextStyle(fontSize: 13, color: AppTheme.textDark))),
+              ]),
+            ),
+            const SizedBox(height: 24),
+
+            _passwordField(
+              controller: _currentCtrl,
+              label: 'Current Password',
+              hint: '••••••••',
+              obscure: _obscureCurrent,
+              onToggle: () => setState(() => _obscureCurrent = !_obscureCurrent),
+            ),
+
+            const Divider(color: AppTheme.divider, height: 8),
+            const SizedBox(height: 16),
+
+            _passwordField(
+              controller: _newCtrl,
+              label: 'New Password',
+              hint: 'At least 8 characters',
+              obscure: _obscureNew,
+              onToggle: () => setState(() => _obscureNew = !_obscureNew),
+            ),
+
+            _passwordField(
+              controller: _confirmCtrl,
+              label: 'Confirm New Password',
+              hint: 'Re-enter new password',
+              obscure: _obscureConfirm,
+              onToggle: () => setState(() => _obscureConfirm = !_obscureConfirm),
+            ),
+
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _saving ? null : _save,
+                icon: _saving
+                    ? const SizedBox(width: 16, height: 16,
+                        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                    : const Icon(Icons.lock_reset_rounded),
+                label: const Text('Update Password'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Notifications Settings Screen ───────────────────────────────────────────
+
+class NotificationsSettingsScreen extends StatefulWidget {
+  const NotificationsSettingsScreen({super.key});
+  @override
+  State<NotificationsSettingsScreen> createState() => _NotificationsSettingsScreenState();
+}
+
+class _NotificationsSettingsScreenState extends State<NotificationsSettingsScreen> {
+  bool _borrowApproved  = true;
+  bool _borrowRejected  = true;
+  bool _dueSoon         = true;
+  bool _overdue         = true;
+  bool _returnConfirmed = true;
+  bool _damageUpdate    = false;
+
+  Widget _notifTile({
+    required String title,
+    required String subtitle,
+    required bool value,
+    required ValueChanged<bool> onChanged,
+    Color? activeColor,
+  }) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      decoration: BoxDecoration(
+          color: Colors.white, borderRadius: BorderRadius.circular(14)),
+      child: SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        title: Text(title,
+            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: AppTheme.textDark)),
+        subtitle: Text(subtitle,
+            style: const TextStyle(fontSize: 12, color: AppTheme.textMid)),
+        value: value,
+        onChanged: onChanged,
+        activeColor: activeColor ?? AppTheme.primary,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Notifications')),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const SectionHeader(title: 'Borrow Requests'),
+            const SizedBox(height: 12),
+            _notifTile(
+              title: 'Request Approved',
+              subtitle: 'When staff approves your borrow request',
+              value: _borrowApproved,
+              onChanged: (v) => setState(() => _borrowApproved = v),
+              activeColor: AppTheme.success,
+            ),
+            _notifTile(
+              title: 'Request Rejected',
+              subtitle: 'When staff rejects your borrow request',
+              value: _borrowRejected,
+              onChanged: (v) => setState(() => _borrowRejected = v),
+              activeColor: AppTheme.danger,
+            ),
+            const SizedBox(height: 20),
+
+            const SectionHeader(title: 'Due Dates'),
+            const SizedBox(height: 12),
+            _notifTile(
+              title: 'Due Soon Reminder',
+              subtitle: 'Get reminded 1 day before equipment is due',
+              value: _dueSoon,
+              onChanged: (v) => setState(() => _dueSoon = v),
+              activeColor: AppTheme.warning,
+            ),
+            _notifTile(
+              title: 'Overdue Alert',
+              subtitle: 'Alert when equipment return is overdue',
+              value: _overdue,
+              onChanged: (v) => setState(() => _overdue = v),
+              activeColor: AppTheme.danger,
+            ),
+            const SizedBox(height: 20),
+
+            const SectionHeader(title: 'Returns & Reports'),
+            const SizedBox(height: 12),
+            _notifTile(
+              title: 'Return Confirmed',
+              subtitle: 'When staff confirms your equipment return',
+              value: _returnConfirmed,
+              onChanged: (v) => setState(() => _returnConfirmed = v),
+            ),
+            _notifTile(
+              title: 'Damage Report Update',
+              subtitle: 'Updates on your submitted damage reports',
+              value: _damageUpdate,
+              onChanged: (v) => setState(() => _damageUpdate = v),
+            ),
+            const SizedBox(height: 24),
+
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: () {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Notification preferences saved!'),
+                      backgroundColor: AppTheme.success,
+                      behavior: SnackBarBehavior.floating,
+                    ),
+                  );
+                  Navigator.pop(context);
+                },
+                icon: const Icon(Icons.save_rounded),
+                label: const Text('Save Preferences'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Help & FAQ Screen ────────────────────────────────────────────────────────
+
+class HelpFaqScreen extends StatefulWidget {
+  const HelpFaqScreen({super.key});
+  @override
+  State<HelpFaqScreen> createState() => _HelpFaqScreenState();
+}
+
+class _HelpFaqScreenState extends State<HelpFaqScreen> {
+  int? _expanded;
+
+  final _faqs = const [
+    {
+      'q': 'How do I borrow equipment?',
+      'a': 'Go to the Equipment Catalog, tap on the item you want to borrow, fill in the Borrow Request form, and submit. Your request will be reviewed by lab staff.',
+    },
+    {
+      'q': 'How long can I borrow equipment?',
+      'a': 'The borrowing period is set when you submit your request by choosing a return date. Maximum borrowing period is 30 days.',
+    },
+    {
+      'q': 'What happens if I return equipment late?',
+      'a': 'Late returns are recorded in your profile. Repeated late returns may affect your borrowing privileges. Always return equipment on or before the due date.',
+    },
+    {
+      'q': 'How do I scan a QR code to borrow?',
+      'a': 'Tap "Scan QR" on the home screen, point your camera at the equipment\'s QR code, and the system will automatically identify the equipment for your borrow request.',
+    },
+    {
+      'q': 'What do I do if equipment is damaged?',
+      'a': 'Report it immediately using the Damage Report feature. Go to My Borrowings, find the item, and tap "Report". Describe the damage and submit — lab staff will be notified.',
+    },
+    {
+      'q': 'Can I cancel a borrow request?',
+      'a': 'You can cancel a pending request by contacting the lab staff directly. Once approved, cancellations must also be done in person at the laboratory.',
+    },
+    {
+      'q': 'I forgot my password, what should I do?',
+      'a': 'Tap "Forgot Password?" on the login screen, or contact your lab staff to reset your account credentials.',
+    },
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Help & FAQ')),
+      body: Column(
+        children: [
+          // Banner
+          Container(
+            color: AppTheme.primary,
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+            child: Row(children: [
+              Container(
+                width: 48, height: 48,
+                decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(14)),
+                child: const Icon(Icons.help_outline_rounded, color: Colors.white, size: 26),
+              ),
+              const SizedBox(width: 14),
+              const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('Frequently Asked Questions',
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+                SizedBox(height: 2),
+                Text('Tap a question to see the answer',
+                    style: TextStyle(color: AppTheme.textLight, fontSize: 12)),
+              ])),
+            ]),
+          ),
+
+          // FAQ List
+          Expanded(
+            child: ListView.separated(
+              padding: const EdgeInsets.all(16),
+              itemCount: _faqs.length,
+              separatorBuilder: (_, __) => const SizedBox(height: 8),
+              itemBuilder: (_, i) {
+                final isOpen = _expanded == i;
+                return GestureDetector(
+                  onTap: () => setState(() => _expanded = isOpen ? null : i),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                          color: isOpen ? AppTheme.primary.withOpacity(0.3) : AppTheme.divider),
+                      boxShadow: isOpen ? [
+                        BoxShadow(color: AppTheme.primary.withOpacity(0.08),
+                            blurRadius: 8, offset: const Offset(0, 2))
+                      ] : [],
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Row(children: [
+                          Container(
+                            width: 28, height: 28,
+                            decoration: BoxDecoration(
+                                color: isOpen ? AppTheme.primary : AppTheme.surface,
+                                borderRadius: BorderRadius.circular(8)),
+                            child: Center(
+                              child: Text('${i + 1}',
+                                  style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.bold,
+                                      color: isOpen ? Colors.white : AppTheme.textMid)),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(child: Text(_faqs[i]['q']!,
+                              style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                  color: isOpen ? AppTheme.primary : AppTheme.textDark))),
+                          Icon(isOpen ? Icons.expand_less_rounded : Icons.expand_more_rounded,
+                              color: isOpen ? AppTheme.primary : AppTheme.textLight),
+                        ]),
+                        if (isOpen) ...[
+                          const SizedBox(height: 12),
+                          const Divider(color: AppTheme.divider, height: 1),
+                          const SizedBox(height: 12),
+                          Text(_faqs[i]['a']!,
+                              style: const TextStyle(
+                                  fontSize: 13,
+                                  color: AppTheme.textMid,
+                                  height: 1.5)),
+                        ],
+                      ]),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+
+          // Contact bar
+          Container(
+            padding: const EdgeInsets.fromLTRB(20, 14, 20, 20),
+            color: Colors.white,
+            child: Row(children: [
+              const Icon(Icons.mail_outline_rounded, color: AppTheme.primary, size: 20),
+              const SizedBox(width: 10),
+              const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('Still need help?', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppTheme.textDark)),
+                Text('cea.lab@neu.edu.ph', style: TextStyle(fontSize: 12, color: AppTheme.textMid)),
+              ])),
+              TextButton(
+                onPressed: () {},
+                child: const Text('Contact Us', style: TextStyle(color: AppTheme.primary, fontWeight: FontWeight.bold)),
+              ),
+            ]),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── About Screen ─────────────────────────────────────────────────────────────
+
+class AboutScreen extends StatelessWidget {
+  const AboutScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('About LabTrack')),
+      body: SingleChildScrollView(
+        child: Column(
+          children: [
+            // Hero
+            Container(
+              width: double.infinity,
+              color: AppTheme.primary,
+              padding: const EdgeInsets.fromLTRB(20, 32, 20, 32),
+              child: const Column(children: [
+                NeuLogo(size: 72),
+                SizedBox(height: 16),
+                Text('LabTrack',
+                    style: TextStyle(color: Colors.white, fontSize: 28,
+                        fontWeight: FontWeight.bold, letterSpacing: 1.5)),
+                SizedBox(height: 4),
+                Text('CEA Laboratory · New Era University',
+                    style: TextStyle(color: AppTheme.textLight, fontSize: 13)),
+                SizedBox(height: 12),
+                StatusBadge(label: 'Version 1.0.0', color: AppTheme.accent),
+              ]),
+            ),
+
+            Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // About card
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(18),
+                    decoration: BoxDecoration(
+                        color: Colors.white, borderRadius: BorderRadius.circular(16)),
+                    child: const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text('About This App', style: TextStyle(
+                          fontSize: 15, fontWeight: FontWeight.bold, color: AppTheme.textDark)),
+                      SizedBox(height: 10),
+                      Text(
+                        'LabTrack is a mobile equipment borrowing and return monitoring system '
+                        'developed for the College of Engineering and Architecture (CEA) Laboratory '
+                        'of New Era University.\n\n'
+                        'The system allows students to borrow laboratory equipment digitally, '
+                        'track their active loans, and report damage — while giving lab staff '
+                        'full visibility and control over inventory.',
+                        style: TextStyle(fontSize: 13, color: AppTheme.textMid, height: 1.6),
+                      ),
+                    ]),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Info tiles
+                  _AboutTile(icon: Icons.school_rounded,     label: 'Institution',  value: 'New Era University'),
+                  _AboutTile(icon: Icons.business_rounded,   label: 'College',      value: 'College of Engineering & Architecture'),
+                  _AboutTile(icon: Icons.code_rounded,       label: 'Platform',     value: 'Flutter (Android & iOS)'),
+                  _AboutTile(icon: Icons.storage_rounded,    label: 'Backend',      value: 'PHP + MySQL (Laragon)'),
+                  _AboutTile(icon: Icons.calendar_month_rounded, label: 'Year',     value: '2026'),
+                  const SizedBox(height: 16),
+
+                  // Divider
+                  const Divider(color: AppTheme.divider),
+                  const SizedBox(height: 12),
+                  const Center(
+                    child: Text('Developed as a Capstone Project',
+                        style: TextStyle(fontSize: 12, color: AppTheme.textLight)),
+                  ),
+                  const SizedBox(height: 4),
+                  const Center(
+                    child: Text('New Era University · CEA · 2026',
+                        style: TextStyle(fontSize: 12, color: AppTheme.textLight)),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AboutTile extends StatelessWidget {
+  final IconData icon;
+  final String label, value;
+  const _AboutTile({required this.icon, required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(
+          color: Colors.white, borderRadius: BorderRadius.circular(12)),
+      child: Row(children: [
+        Container(
+          width: 36, height: 36,
+          decoration: BoxDecoration(
+              color: AppTheme.primary.withOpacity(0.08),
+              borderRadius: BorderRadius.circular(10)),
+          child: Icon(icon, color: AppTheme.primary, size: 18),
+        ),
+        const SizedBox(width: 14),
+        Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(label, style: const TextStyle(fontSize: 11, color: AppTheme.textMid)),
+          Text(value,  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppTheme.textDark)),
+        ]),
+      ]),
     );
   }
 }
@@ -2873,7 +4220,8 @@ class _ProfileStat extends StatelessWidget {
 class _SettingTile extends StatelessWidget {
   final IconData icon;
   final String label;
-  const _SettingTile({required this.icon, required this.label});
+  final VoidCallback? onTap;
+  const _SettingTile({required this.icon, required this.label, this.onTap});
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -2886,7 +4234,7 @@ class _SettingTile extends StatelessWidget {
             style: const TextStyle(fontSize: 14, color: AppTheme.textDark)),
         trailing: const Icon(Icons.arrow_forward_ios_rounded,
             size: 14, color: AppTheme.textLight),
-        onTap: () {},
+        onTap: onTap ?? () {},
       ),
     );
   }
@@ -2906,7 +4254,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   final List<Widget> _pages = const [
     _AdminHome(),
     AdminRequestsScreen(),
-    EquipmentCatalogScreen(),
+    AdminInventoryScreen(),
     AdminReportsScreen(),
   ];
 
@@ -2961,7 +4309,23 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           ),
         ],
       ),
-      body: _pages[_currentIndex],
+      body: Column(
+        children: [
+          if (Session.isDemoMode)
+            Container(
+              width: double.infinity,
+              color: AppTheme.accent,
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: const Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                Icon(Icons.play_circle_outline_rounded, color: Colors.white, size: 14),
+                SizedBox(width: 6),
+                Text('DEMO MODE — Data is not saved to the database',
+                    style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
+              ]),
+            ),
+          Expanded(child: _pages[_currentIndex]),
+        ],
+      ),
       bottomNavigationBar: Container(
         decoration: const BoxDecoration(
           color: Colors.white,
@@ -3332,32 +4696,421 @@ class _OverdueCard extends StatelessWidget {
 
 // ─── Admin Requests Screen ────────────────────────────────────────────────────
 
-class AdminRequestsScreen extends StatelessWidget {
+class AdminRequestsScreen extends StatefulWidget {
   const AdminRequestsScreen({super.key});
+  @override
+  State<AdminRequestsScreen> createState() => _AdminRequestsScreenState();
+}
+
+class _AdminRequestsScreenState extends State<AdminRequestsScreen> {
+  bool _loading = true;
+  List<dynamic> _all = [];
+
+  @override
+  void initState() { super.initState(); _load(); }
+
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    try {
+      final data = await ApiService.getRequests();
+      setState(() { _all = data; _loading = false; });
+    } catch (_) { setState(() => _loading = false); }
+  }
+
+  Color _statusColor(String s) {
+    switch (s) {
+      case 'Pending':  return AppTheme.accent;
+      case 'Approved': return AppTheme.success;
+      case 'Returned': return AppTheme.textMid;
+      case 'Rejected': return AppTheme.danger;
+      default:         return AppTheme.textMid;
+    }
+  }
+
+  Future<void> _action(int txId, String action) async {
+    try {
+      await ApiService.updateRequestStatus(txId, action);
+      _load();
+    } catch (_) {}
+  }
+
+  Widget _buildCard(dynamic e, {bool showActions = false}) {
+    final status = e['status'] ?? '';
+    final sc = _statusColor(status);
+    final txId = int.tryParse('${e['transaction_id']}') ?? 0;
+    final studentName = e['borrower_name'] ?? e['student_number'] ?? '';
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: sc.withOpacity(0.25))),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            CircleAvatar(radius: 20, backgroundColor: sc.withOpacity(0.12),
+                child: Text(studentName.isNotEmpty ? studentName[0].toUpperCase() : '?',
+                    style: TextStyle(color: sc, fontWeight: FontWeight.bold, fontSize: 15))),
+            const SizedBox(width: 12),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(studentName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppTheme.textDark)),
+              Text('ID: ${e['student_number'] ?? ''}', style: const TextStyle(fontSize: 11, color: AppTheme.textMid)),
+            ])),
+            StatusBadge(label: status, color: sc),
+          ]),
+          const SizedBox(height: 10),
+          Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(color: AppTheme.surface, borderRadius: BorderRadius.circular(10)),
+            child: Row(children: [
+              const Icon(Icons.science_outlined, size: 13, color: AppTheme.textMid),
+              const SizedBox(width: 6),
+              Expanded(child: Text('${e['equipment_name'] ?? ''}  •  Qty: ${e['quantity'] ?? 1}',
+                  style: const TextStyle(fontSize: 12, color: AppTheme.textDark, fontWeight: FontWeight.w600))),
+              const Icon(Icons.calendar_today_rounded, size: 13, color: AppTheme.textMid),
+              const SizedBox(width: 4),
+              Text('Due: ${(e['due_date'] ?? '').toString().split('T').first}',
+                  style: const TextStyle(fontSize: 11, color: AppTheme.textMid)),
+            ]),
+          ),
+          if (showActions && status == 'Pending') ...[
+            const SizedBox(height: 10),
+            Row(children: [
+              Expanded(child: OutlinedButton.icon(
+                onPressed: () => _action(txId, 'reject'),
+                icon: const Icon(Icons.close_rounded, size: 16),
+                label: const Text('Deny'),
+                style: OutlinedButton.styleFrom(foregroundColor: AppTheme.danger, side: const BorderSide(color: AppTheme.danger)),
+              )),
+              const SizedBox(width: 10),
+              Expanded(child: ElevatedButton.icon(
+                onPressed: () => _action(txId, 'approve'),
+                icon: const Icon(Icons.check_rounded, size: 16),
+                label: const Text('Approve'),
+                style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success),
+              )),
+            ]),
+          ],
+        ]),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
+    if (_loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    final pending  = _all.where((e) => e['status'] == 'Pending').toList();
+    final approved = _all.where((e) => e['status'] == 'Approved').toList();
+
     return DefaultTabController(
       length: 3,
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Requests'),
           bottom: const TabBar(
-            indicatorColor: AppTheme.accent,
-            labelColor: Colors.white,
+            indicatorColor: AppTheme.accent, labelColor: Colors.white,
             unselectedLabelColor: AppTheme.textLight,
-            tabs: [
-              Tab(text: 'Pending'),
-              Tab(text: 'Approved'),
-              Tab(text: 'All'),
-            ],
+            tabs: [Tab(text: 'Pending'), Tab(text: 'Approved'), Tab(text: 'All')],
           ),
         ),
-        body: TabBarView(
+        body: TabBarView(children: [
+          RefreshIndicator(onRefresh: _load, child: ListView(padding: const EdgeInsets.all(16),
+            children: pending.isEmpty
+                ? [const Center(child: Padding(padding: EdgeInsets.all(32), child: Text('No pending requests', style: TextStyle(color: AppTheme.textMid))))]
+                : pending.map((e) => _buildCard(e, showActions: true)).toList())),
+          RefreshIndicator(onRefresh: _load, child: ListView(padding: const EdgeInsets.all(16),
+            children: approved.isEmpty
+                ? [const Center(child: Padding(padding: EdgeInsets.all(32), child: Text('No approved requests', style: TextStyle(color: AppTheme.textMid))))]
+                : approved.map((e) => _buildCard(e)).toList())),
+          RefreshIndicator(onRefresh: _load, child: ListView(padding: const EdgeInsets.all(16),
+            children: _all.isEmpty
+                ? [const Center(child: Padding(padding: EdgeInsets.all(32), child: Text('No requests yet', style: TextStyle(color: AppTheme.textMid))))]
+                : _all.map((e) => _buildCard(e)).toList())),
+        ]),
+      ),
+    );
+  }
+}
+
+
+
+// ─── Admin Inventory Screen ──────────────────────────────────────────────────
+
+class AdminInventoryScreen extends StatefulWidget {
+  const AdminInventoryScreen({super.key});
+  @override
+  State<AdminInventoryScreen> createState() => _AdminInventoryScreenState();
+}
+
+class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
+  List<dynamic> _equipment = [];
+  bool _loading = true;
+  String _search = '';
+  String _filter = 'All';
+  final _categories = ['All', 'Electronics', 'Optics', 'Measurement', 'Tools', 'Microcontroller'];
+
+  @override
+  void initState() { super.initState(); _load(); }
+
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    try {
+      final data = await ApiService.getEquipment();
+      setState(() { _equipment = data; _loading = false; });
+    } catch (_) { setState(() => _loading = false); }
+  }
+
+  Color _conditionColor(String c) {
+    switch (c) {
+      case 'Available':   return AppTheme.success;
+      case 'Borrowed':    return AppTheme.warning;
+      default:            return AppTheme.textMid;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return const Center(child: CircularProgressIndicator());
+
+    final filtered = _equipment.where((e) {
+      final matchCat = _filter == 'All' || e['category'] == _filter;
+      final matchSearch = _search.isEmpty ||
+          (e['equipment_name'] as String).toLowerCase().contains(_search.toLowerCase()) ||
+          (e['qr_code'] as String).toLowerCase().contains(_search.toLowerCase());
+      return matchCat && matchSearch;
+    }).toList();
+
+    final totalItems     = _equipment.length;
+    final availableItems = _equipment.where((e) => e['status'] == 'Available').length;
+    final unavailableItems = totalItems - availableItems;
+
+    return Scaffold(
+      backgroundColor: AppTheme.surface,
+      body: Column(
+        children: [
+          // ── Header with summary stats ──
+          Container(
+            color: AppTheme.primary,
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+            child: Column(
+              children: [
+                // Summary row
+                Row(
+                  children: [
+                    _InvStat(label: 'Total Items', value: '$totalItems', icon: Icons.inventory_2_rounded, color: Colors.white),
+                    const SizedBox(width: 10),
+                    _InvStat(label: 'Available', value: '$availableItems', icon: Icons.check_circle_outline_rounded, color: AppTheme.success),
+                    const SizedBox(width: 10),
+                    _InvStat(label: 'Borrowed', value: '$unavailableItems', icon: Icons.remove_circle_outline_rounded, color: AppTheme.danger),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                // Search bar
+                TextField(
+                  onChanged: (v) => setState(() => _search = v),
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    hintText: 'Search by name or ID...',
+                    hintStyle: const TextStyle(color: AppTheme.textLight),
+                    prefixIcon: const Icon(Icons.search_rounded, color: AppTheme.textLight),
+                    filled: true,
+                    fillColor: Colors.white.withOpacity(0.1),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                    enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppTheme.accent, width: 1.5)),
+                    contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                // Category filter chips
+                SizedBox(
+                  height: 32,
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: _categories.length,
+                    separatorBuilder: (_, __) => const SizedBox(width: 8),
+                    itemBuilder: (_, i) {
+                      final c = _categories[i];
+                      final sel = _filter == c;
+                      return GestureDetector(
+                        onTap: () => setState(() => _filter = c),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 160),
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: sel ? AppTheme.accent : Colors.white.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Text(c,
+                              style: TextStyle(
+                                  color: sel ? AppTheme.primary : AppTheme.textLight,
+                                  fontSize: 12,
+                                  fontWeight: sel ? FontWeight.bold : FontWeight.normal)),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // ── Equipment list ──
+          Expanded(
+            child: filtered.isEmpty
+                ? const Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.inventory_2_outlined, size: 52, color: AppTheme.textLight),
+                        SizedBox(height: 12),
+                        Text('No equipment found', style: TextStyle(color: AppTheme.textMid, fontSize: 14)),
+                      ],
+                    ),
+                  )
+                : ListView.separated(
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
+                    itemCount: filtered.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 10),
+                    itemBuilder: (_, i) {
+                      final e = filtered[i];
+                      final status = e['status'] ?? 'Available';
+                      final condColor = _conditionColor(status);
+
+                      return GestureDetector(
+                        onTap: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                                builder: (_) => EquipmentDetailScreen(equipment: {
+                                  'name': e['equipment_name'],
+                                  'id':   e['qr_code'],
+                                  'cat':  e['category'],
+                                  'status': e['status'],
+                                  'location': e['location'] ?? '',
+                                  'qty': 1,
+                                  'available': status == 'Available' ? 1 : 0,
+                                  'condition': status,
+                                }))),
+                        child: Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border(left: BorderSide(color: condColor, width: 4)),
+                          ),
+                          child: Row(
+                            children: [
+                              // Icon box
+                              Container(
+                                width: 48,
+                                height: 48,
+                                decoration: BoxDecoration(
+                                    color: AppTheme.primary.withOpacity(0.08),
+                                    borderRadius: BorderRadius.circular(12)),
+                                child: const Icon(Icons.science_outlined, color: AppTheme.primary, size: 24),
+                              ),
+                              const SizedBox(width: 14),
+                              // Info
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(e['equipment_name'] as String,
+                                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppTheme.textDark)),
+                                    const SizedBox(height: 2),
+                                    Text('${e['qr_code']}  ·  ${e['category']}',
+                                        style: const TextStyle(fontSize: 12, color: AppTheme.textMid)),
+                                    const SizedBox(height: 8),
+                                    Row(
+                                      children: [
+                                        // Availability bar
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              StatusBadge(label: status, color: condColor),
+                                            ],
+                                          ),
+                                        ),
+                                        const SizedBox(width: 12),
+                                        StatusBadge(label: e['category'] as String, color: AppTheme.primary),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              const Icon(Icons.chevron_right_rounded, color: AppTheme.textLight),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () async {
+          final result = await Navigator.push<Map<String, dynamic>>(
+              context,
+              MaterialPageRoute(builder: (_) => const EquipmentRegistrationScreen()));
+          if (result != null) {
+            _load(); // reload from API
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('${result['name']} registered successfully!'),
+                backgroundColor: AppTheme.success,
+                behavior: SnackBarBehavior.floating,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+            );
+          }
+        },
+        backgroundColor: AppTheme.accent,
+        foregroundColor: AppTheme.primary,
+        icon: const Icon(Icons.add_rounded),
+        label: const Text('Add Equipment', style: TextStyle(fontWeight: FontWeight.bold)),
+      ),
+    );
+  }
+}
+
+// ── Inventory stat mini-card ──
+class _InvStat extends StatelessWidget {
+  final String label, value;
+  final IconData icon;
+  final Color color;
+  const _InvStat({required this.label, required this.value, required this.icon, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
           children: [
-            _AdminReqList(status: 'Pending', color: AppTheme.accent),
-            _AdminReqList(status: 'Approved', color: AppTheme.success),
-            _AdminReqList(status: 'All', color: AppTheme.textMid),
+            Icon(icon, color: color, size: 16),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(value,
+                      style: TextStyle(
+                          color: color, fontSize: 15, fontWeight: FontWeight.bold)),
+                  Text(label,
+                      style: const TextStyle(
+                          color: AppTheme.textLight, fontSize: 9),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis),
+                ],
+              ),
+            ),
           ],
         ),
       ),
@@ -3365,479 +5118,782 @@ class AdminRequestsScreen extends StatelessWidget {
   }
 }
 
-class _AdminReqList extends StatelessWidget {
-  final String status;
-  final Color color;
-  const _AdminReqList({required this.status, required this.color});
+// ─── Equipment Detail Screen ───────────────────────────────────────────────────
+
+class EquipmentDetailScreen extends StatelessWidget {
+  final Map<String, dynamic> equipment;
+  const EquipmentDetailScreen({super.key, required this.equipment});
 
   @override
   Widget build(BuildContext context) {
-    // Different data sets per tab
-    final pendingItems = [
-      {'student': 'Juan Santos', 'id': '2024-00123', 'item': 'Digital Multimeter', 'due': 'Mar 7', 'qty': '1'},
-      {'student': 'Ana Reyes', 'id': '2024-00145', 'item': 'Oscilloscope', 'due': 'Mar 8', 'qty': '1'},
-      {'student': 'Leo Cruz', 'id': '2024-00167', 'item': 'Breadboard Kit', 'due': 'Mar 6', 'qty': '2'},
-    ];
-    final approvedItems = [
-      {'student': 'Maria Lim', 'id': '2024-00111', 'item': 'Soldering Kit', 'due': 'Mar 5', 'qty': '1', 'approvedBy': 'Cruz, M.'},
-      {'student': 'Carlo Bato', 'id': '2024-00099', 'item': 'Vernier Caliper', 'due': 'Mar 4', 'qty': '3', 'approvedBy': 'Cruz, M.'},
-    ];
-    final allItems = [
-      {'student': 'Juan Santos', 'id': '2024-00123', 'item': 'Digital Multimeter', 'due': 'Mar 7', 'status': 'Pending', 'qty': '1'},
-      {'student': 'Ana Reyes', 'id': '2024-00145', 'item': 'Oscilloscope', 'due': 'Mar 8', 'status': 'Pending', 'qty': '1'},
-      {'student': 'Maria Lim', 'id': '2024-00111', 'item': 'Soldering Kit', 'due': 'Mar 5', 'status': 'Approved', 'qty': '1'},
-      {'student': 'Carlo Bato', 'id': '2024-00099', 'item': 'Vernier Caliper', 'due': 'Mar 4', 'status': 'Approved', 'qty': '3'},
-      {'student': 'Leo Cruz', 'id': '2024-00167', 'item': 'Breadboard Kit', 'due': 'Mar 6', 'status': 'Pending', 'qty': '2'},
-      {'student': 'Bea Torres', 'id': '2024-00188', 'item': 'Power Supply Unit', 'due': 'Mar 3', 'status': 'Returned', 'qty': '1'},
-    ];
+    final avail = equipment['available'] as int;
+    final qty = equipment['qty'] as int;
+    final borrowed = qty - avail;
 
-    if (status == 'Pending') {
-      return _PendingTab(items: pendingItems);
-    } else if (status == 'Approved') {
-      return _ApprovedTab(items: approvedItems);
-    } else {
-      return _AllRequestsTab(items: allItems);
-    }
-  }
-}
-
-// ── Pending Tab: shows Approve/Deny action buttons ──
-class _PendingTab extends StatelessWidget {
-  final List<Map<String, String>> items;
-  const _PendingTab({required this.items});
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        // Summary bar
-        Container(
-          color: AppTheme.accent.withOpacity(0.08),
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-          child: Row(
-            children: [
-              const Icon(Icons.pending_actions_rounded,
-                  color: AppTheme.accent, size: 16),
-              const SizedBox(width: 8),
-              Text('${items.length} requests awaiting your approval',
-                  style: const TextStyle(
-                      fontSize: 12,
-                      color: AppTheme.accent,
-                      fontWeight: FontWeight.w600)),
-            ],
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(equipment['id'] as String),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.edit_outlined, color: Colors.white),
+            onPressed: () {},
+            tooltip: 'Edit',
           ),
-        ),
-        Expanded(
-          child: ListView.separated(
-            padding: const EdgeInsets.all(16),
-            itemCount: items.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 12),
-            itemBuilder: (_, i) {
-              final e = items[i];
-              return Container(
-                decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(
-                        color: AppTheme.accent.withOpacity(0.2))),
-                child: Column(
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          CircleAvatar(
-                            radius: 20,
-                            backgroundColor:
-                                AppTheme.accent.withOpacity(0.12),
-                            child: Text(e['student']![0],
-                                style: const TextStyle(
-                                    color: AppTheme.accent,
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 15)),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                // Name + badge on same row
-                                Row(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Expanded(
-                                      child: Text(e['student']!,
-                                          style: const TextStyle(
-                                              fontWeight: FontWeight.bold,
-                                              fontSize: 14,
-                                              color: AppTheme.textDark)),
-                                    ),
-                                    const SizedBox(width: 6),
-                                    StatusBadge(
-                                        label: 'Pending',
-                                        color: AppTheme.accent),
-                                  ],
-                                ),
-                                Text('ID: ${e['id']}',
-                                    style: const TextStyle(
-                                        fontSize: 11,
-                                        color: AppTheme.textMid)),
-                                const SizedBox(height: 8),
-                                // Equipment chip — Flexible prevents overflow
-                                Row(
-                                  children: [
-                                    Flexible(
-                                      child: Container(
-                                        padding: const EdgeInsets.symmetric(
-                                            horizontal: 8, vertical: 4),
-                                        decoration: BoxDecoration(
-                                          color: AppTheme.primary
-                                              .withOpacity(0.07),
-                                          borderRadius:
-                                              BorderRadius.circular(8),
-                                        ),
-                                        child: Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            const Icon(
-                                                Icons.science_outlined,
-                                                size: 12,
-                                                color: AppTheme.primary),
-                                            const SizedBox(width: 4),
-                                            Flexible(
-                                              child: Text(e['item']!,
-                                                  overflow: TextOverflow.ellipsis,
-                                                  style: const TextStyle(
-                                                      fontSize: 11,
-                                                      color: AppTheme.primary,
-                                                      fontWeight:
-                                                          FontWeight.w600)),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Text('Qty: ${e['qty']}',
-                                        style: const TextStyle(
-                                            fontSize: 11,
-                                            color: AppTheme.textMid)),
-                                  ],
-                                ),
-                                const SizedBox(height: 4),
-                                Row(
-                                  children: [
-                                    const Icon(Icons.calendar_today_rounded,
-                                        size: 11, color: AppTheme.textLight),
-                                    const SizedBox(width: 4),
-                                    Text('Due: ${e['due']}',
-                                        style: const TextStyle(
-                                            fontSize: 11,
-                                            color: AppTheme.textMid)),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
+        ],
+      ),
+      backgroundColor: AppTheme.surface,
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Hero card
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                  color: AppTheme.primary,
+                  borderRadius: BorderRadius.circular(20)),
+              child: Column(
+                children: [
+                  Container(
+                    width: 64,
+                    height: 64,
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(18),
                     ),
-                    Container(
-                      decoration: const BoxDecoration(
-                        border: Border(
-                            top: BorderSide(color: AppTheme.divider)),
-                      ),
-                      padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: OutlinedButton.icon(
-                              onPressed: () {},
-                              icon: const Icon(Icons.close_rounded,
-                                  size: 15),
-                              label: const Text('Deny'),
-                              style: OutlinedButton.styleFrom(
-                                  foregroundColor: AppTheme.danger,
-                                  side: const BorderSide(
-                                      color: AppTheme.danger),
-                                  padding: const EdgeInsets.symmetric(
-                                      vertical: 10)),
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            flex: 2,
-                            child: ElevatedButton.icon(
-                              onPressed: () {},
-                              icon: const Icon(Icons.check_rounded,
-                                  size: 15),
-                              label: const Text('Approve Request'),
-                              style: ElevatedButton.styleFrom(
-                                  backgroundColor: AppTheme.success,
-                                  padding: const EdgeInsets.symmetric(
-                                      vertical: 10)),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            },
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-// ── Approved Tab: shows check-in QR scan action ──
-class _ApprovedTab extends StatelessWidget {
-  final List<Map<String, String>> items;
-  const _ApprovedTab({required this.items});
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Container(
-          color: AppTheme.success.withOpacity(0.08),
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-          child: Row(
-            children: [
-              const Icon(Icons.check_circle_rounded,
-                  color: AppTheme.success, size: 16),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text('${items.length} approved — ready for equipment release',
-                    style: const TextStyle(
-                        fontSize: 12,
-                        color: AppTheme.success,
-                        fontWeight: FontWeight.w600),
-                    overflow: TextOverflow.ellipsis),
+                    child: const Icon(Icons.science_outlined, color: Colors.white, size: 34),
+                  ),
+                  const SizedBox(height: 14),
+                  Text(equipment['name'] as String,
+                      style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                      textAlign: TextAlign.center),
+                  const SizedBox(height: 4),
+                  Text('${equipment['id']}  ·  ${equipment['cat']}',
+                      style: const TextStyle(color: AppTheme.textLight, fontSize: 13)),
+                  const SizedBox(height: 16),
+                  // Stats row
+                  Row(
+                    children: [
+                      _DetailStat(label: 'Total', value: '$qty'),
+                      _vDivider(),
+                      _DetailStat(label: 'Available', value: '$avail', valueColor: AppTheme.success),
+                      _vDivider(),
+                      _DetailStat(label: 'Borrowed', value: '$borrowed', valueColor: AppTheme.warning),
+                    ],
+                  ),
+                ],
               ),
-            ],
-          ),
-        ),
-        Expanded(
-          child: ListView.separated(
-            padding: const EdgeInsets.all(16),
-            itemCount: items.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 12),
-            itemBuilder: (_, i) {
-              final e = items[i];
-              return Container(
-                decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(
-                        color: AppTheme.success.withOpacity(0.25))),
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Container(
-                          width: 42,
-                          height: 42,
-                          decoration: BoxDecoration(
-                              color: AppTheme.success.withOpacity(0.1),
-                              borderRadius: BorderRadius.circular(12)),
-                          child: const Icon(Icons.science_outlined,
-                              color: AppTheme.success),
+            ),
+            const SizedBox(height: 20),
+
+            // Details card
+            _SectionDivider(icon: Icons.info_outline_rounded, label: 'Equipment Details', color: AppTheme.primary),
+            const SizedBox(height: 12),
+            _DetailRow(label: 'Equipment ID', value: equipment['id'] as String),
+            _DetailRow(label: 'Category', value: equipment['cat'] as String),
+            _DetailRow(label: 'Total Quantity', value: '$qty units'),
+            _DetailRow(label: 'Available', value: '$avail units'),
+            _DetailRow(label: 'Condition', value: equipment['condition'] as String,
+                valueColor: _condColor(equipment['condition'] as String)),
+            const SizedBox(height: 20),
+
+            // QR Code placeholder
+            _SectionDivider(icon: Icons.qr_code_rounded, label: 'QR Code', color: AppTheme.primary),
+            const SizedBox(height: 12),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                  color: Colors.white, borderRadius: BorderRadius.circular(16)),
+              child: Column(
+                children: [
+                  Container(
+                    width: 140,
+                    height: 140,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      border: Border.all(color: AppTheme.divider, width: 2),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: CustomPaint(painter: _QrPlaceholderPainter()),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(equipment['id'] as String,
+                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppTheme.textDark)),
+                  const SizedBox(height: 4),
+                  const Text('Scan to identify this equipment',
+                      style: TextStyle(fontSize: 11, color: AppTheme.textMid)),
+                  const SizedBox(height: 14),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () {},
+                          icon: const Icon(Icons.share_outlined, size: 16),
+                          label: const Text('Share QR'),
+                          style: OutlinedButton.styleFrom(
+                              foregroundColor: AppTheme.primary,
+                              side: const BorderSide(color: AppTheme.primary)),
                         ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(e['item']!,
-                                  style: const TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 14,
-                                      color: AppTheme.textDark)),
-                              Text(
-                                  '${e['student']}  •  Qty: ${e['qty']}',
-                                  style: const TextStyle(
-                                      fontSize: 12,
-                                      color: AppTheme.textMid)),
-                            ],
-                          ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed: () {},
+                          icon: const Icon(Icons.print_rounded, size: 16),
+                          label: const Text('Print QR'),
                         ),
-                        StatusBadge(
-                            label: 'Approved', color: AppTheme.success),
-                      ],
-                    ),
-                    const SizedBox(height: 10),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 8),
-                      decoration: BoxDecoration(
-                          color: AppTheme.surface,
-                          borderRadius: BorderRadius.circular(10)),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.person_outline_rounded,
-                              size: 13, color: AppTheme.textMid),
-                          const SizedBox(width: 6),
-                          Text('Approved by: ${e['approvedBy']}',
-                              style: const TextStyle(
-                                  fontSize: 11, color: AppTheme.textMid)),
-                          const Spacer(),
-                          const Icon(Icons.calendar_today_rounded,
-                              size: 13, color: AppTheme.textMid),
-                          const SizedBox(width: 6),
-                          Text('Due: ${e['due']}',
-                              style: const TextStyle(
-                                  fontSize: 11, color: AppTheme.textMid)),
-                        ],
                       ),
-                    ),
-                    const SizedBox(height: 10),
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton.icon(
-                        onPressed: () => Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                                builder: (_) => const QRScanScreen())),
-                        icon: const Icon(Icons.qr_code_scanner_rounded,
-                            size: 16),
-                        label: const Text('Scan to Release Equipment'),
-                        style: ElevatedButton.styleFrom(
-                            backgroundColor: AppTheme.primary,
-                            padding:
-                                const EdgeInsets.symmetric(vertical: 10)),
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            },
-          ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
-      ],
+      ),
     );
   }
-}
 
-// ── All Requests Tab: compact list with colour-coded status pills + filter ──
-class _AllRequestsTab extends StatefulWidget {
-  final List<Map<String, String>> items;
-  const _AllRequestsTab({required this.items});
-  @override
-  State<_AllRequestsTab> createState() => _AllRequestsTabState();
-}
-
-class _AllRequestsTabState extends State<_AllRequestsTab> {
-  String _filter = 'All';
-
-  Color _statusColor(String s) {
-    switch (s) {
-      case 'Pending': return AppTheme.accent;
-      case 'Approved': return AppTheme.success;
-      case 'Returned': return AppTheme.textMid;
+  Color _condColor(String c) {
+    switch (c) {
+      case 'Good': return AppTheme.success;
+      case 'Fair': return AppTheme.warning;
+      case 'Under Repair': return AppTheme.danger;
       default: return AppTheme.textMid;
     }
   }
+}
+
+Widget _vDivider() => Container(
+    width: 1, height: 32, color: Colors.white24,
+    margin: const EdgeInsets.symmetric(horizontal: 16));
+
+class _DetailStat extends StatelessWidget {
+  final String label, value;
+  final Color valueColor;
+  const _DetailStat({required this.label, required this.value, this.valueColor = Colors.white});
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: Column(
+        children: [
+          Text(value, style: TextStyle(color: valueColor, fontSize: 20, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 2),
+          Text(label, style: const TextStyle(color: AppTheme.textLight, fontSize: 11)),
+        ],
+      ),
+    );
+  }
+}
+
+class _DetailRow extends StatelessWidget {
+  final String label, value;
+  final Color? valueColor;
+  const _DetailRow({required this.label, required this.value, this.valueColor});
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12)),
+      child: Row(
+        children: [
+          Text(label, style: const TextStyle(fontSize: 13, color: AppTheme.textMid)),
+          const Spacer(),
+          Text(value,
+              style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: valueColor ?? AppTheme.textDark)),
+        ],
+      ),
+    );
+  }
+}
+
+// Simple QR placeholder painter — looks like a real QR at a glance
+class _QrPlaceholderPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final dark = Paint()..color = const Color(0xFF1A2340);
+    final s = size.width / 10;
+
+    // Corner squares
+    void corner(double x, double y) {
+      canvas.drawRect(Rect.fromLTWH(x, y, s * 3, s * 3), dark);
+      canvas.drawRect(Rect.fromLTWH(x + s * 0.5, y + s * 0.5, s * 2, s * 2),
+          Paint()..color = Colors.white);
+      canvas.drawRect(Rect.fromLTWH(x + s, y + s, s, s), dark);
+    }
+    corner(0, 0);
+    corner(size.width - s * 3, 0);
+    corner(0, size.height - s * 3);
+
+    // Random data dots
+    final positions = [
+      [4,0],[5,0],[6,0],[4,1],[6,1],[4,2],[5,2],
+      [0,4],[1,4],[0,5],[2,5],[0,6],[1,6],[2,6],
+      [4,4],[6,4],[5,5],[4,6],[6,6],
+      [7,3],[8,4],[9,4],[7,5],[9,5],[8,6],[7,7],[9,7],
+      [3,7],[4,8],[6,8],[3,9],[5,9],
+    ];
+    for (final p in positions) {
+      canvas.drawRect(
+          Rect.fromLTWH(p[0] * s, p[1] * s, s * 0.85, s * 0.85), dark);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_QrPlaceholderPainter _) => false;
+}
+
+// ─── Equipment Registration Screen ────────────────────────────────────────────
+
+class EquipmentRegistrationScreen extends StatefulWidget {
+  const EquipmentRegistrationScreen({super.key});
+  @override
+  State<EquipmentRegistrationScreen> createState() =>
+      _EquipmentRegistrationScreenState();
+}
+
+class _EquipmentRegistrationScreenState
+    extends State<EquipmentRegistrationScreen> {
+  final _formKey = GlobalKey<FormState>();
+
+  final _nameCtrl = TextEditingController();
+  final _descCtrl = TextEditingController();
+  final _brandCtrl = TextEditingController();
+  final _modelCtrl = TextEditingController();
+  final _serialCtrl = TextEditingController();
+  final _locationCtrl = TextEditingController();
+  final _qtyCtrl = TextEditingController();
+
+  String? _selectedCategory;
+  String? _selectedCondition;
+  bool _qrGenerated = false;
+  String _generatedId = '';
+
+  final _categories = ['Electronics', 'Optics', 'Measurement', 'Tools', 'Safety', 'Other'];
+  final _conditions = ['Good', 'Fair', 'Under Repair', 'For Disposal'];
+
+  String? _validateRequired(String? v) =>
+      (v == null || v.trim().isEmpty) ? 'This field is required' : null;
+
+  String? _validateQty(String? v) {
+    if (v == null || v.trim().isEmpty) return 'Required';
+    final n = int.tryParse(v.trim());
+    if (n == null || n < 1) return 'Enter a valid quantity (min 1)';
+    return null;
+  }
+
+  void _generateAndSubmit() {
+    if (!_formKey.currentState!.validate()) return;
+    if (_selectedCategory == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Please select a category'),
+          backgroundColor: AppTheme.danger));
+      return;
+    }
+    if (_selectedCondition == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Please select equipment condition'),
+          backgroundColor: AppTheme.danger));
+      return;
+    }
+
+    // Generate a mock equipment ID
+    final now = DateTime.now();
+    final id = 'EQ-${now.millisecondsSinceEpoch % 9000 + 1000}';
+    setState(() {
+      _generatedId = id;
+      _qrGenerated = true;
+    });
+  }
+
+  Future<void> _confirmSave() async {
+    showDialog(context: context, barrierDismissible: false,
+        builder: (_) => const Center(child: CircularProgressIndicator()));
+    try {
+      final res = await ApiService.addEquipment({
+        'equipment_name': _nameCtrl.text.trim(),
+        'category':       _selectedCategory,
+        'location':       _locationCtrl.text.trim(),
+      });
+      if (!mounted) return;
+      Navigator.pop(context); // close loading
+      if (res['success'] == true) {
+        Navigator.pop(context, {
+          'equipment_name': _nameCtrl.text.trim(),
+          'qr_code':        res['qr_code'] ?? _generatedId,
+          'category':       _selectedCategory,
+          'status':         'Available',
+          'location':       _locationCtrl.text.trim(),
+        });
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(res['message'] ?? 'Failed to save.'), backgroundColor: AppTheme.danger));
+      }
+    } catch (e) {
+      if (mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Cannot connect to server.'), backgroundColor: AppTheme.danger));
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose(); _descCtrl.dispose(); _brandCtrl.dispose();
+    _modelCtrl.dispose(); _serialCtrl.dispose();
+    _locationCtrl.dispose(); _qtyCtrl.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final filters = ['All', 'Pending', 'Approved', 'Returned'];
-    final visible = _filter == 'All'
-        ? widget.items
-        : widget.items.where((e) => e['status'] == _filter).toList();
+    return Scaffold(
+      backgroundColor: AppTheme.surface,
+      appBar: AppBar(title: const Text('Register Equipment')),
+      body: Form(
+        key: _formKey,
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 40),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
 
-    return Column(
-      children: [
-        // Filter chips
-        Container(
-          color: Colors.white,
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
-          child: Wrap(
-            spacing: 8,
-            runSpacing: 6,
-            children: filters.map((f) {
-              final sel = _filter == f;
-              final c = _statusColor(f);
-              return GestureDetector(
-                onTap: () => setState(() => _filter = f),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 150),
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 14, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: sel ? c : AppTheme.surface,
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(
-                        color: sel ? c : AppTheme.divider),
+              // ── Progress indicator ──
+              _ProgressSteps(step: _qrGenerated ? 2 : 1),
+              const SizedBox(height: 24),
+
+              if (!_qrGenerated) ...[
+                // ══════════════════════════════════════════
+                // STEP 1 — Equipment Information
+                // ══════════════════════════════════════════
+
+                _SectionDivider(
+                    icon: Icons.inventory_2_outlined,
+                    label: 'Basic Information',
+                    color: AppTheme.primary),
+                const SizedBox(height: 16),
+
+                _FieldLabel('Equipment Name *'),
+                const SizedBox(height: 8),
+                TextFormField(
+                  controller: _nameCtrl,
+                  validator: _validateRequired,
+                  textCapitalization: TextCapitalization.words,
+                  decoration: const InputDecoration(
+                    hintText: 'e.g. Digital Multimeter',
+                    prefixIcon: Icon(Icons.science_outlined, color: AppTheme.textMid),
                   ),
-                  child: Text(f,
-                      style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: sel ? Colors.white : AppTheme.textMid)),
                 ),
-              );
-            }).toList(),
-          ),
-        ),
-        const Divider(height: 1, color: AppTheme.divider),
-        Expanded(
-          child: ListView.separated(
-            padding: const EdgeInsets.all(16),
-            itemCount: visible.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 8),
-            itemBuilder: (_, i) {
-              final e = visible[i];
-              final sc = _statusColor(e['status']!);
-              return Container(
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border(
-                      left: BorderSide(color: sc, width: 3)),
+                const SizedBox(height: 16),
+
+                _FieldLabel('Description'),
+                const SizedBox(height: 8),
+                TextFormField(
+                  controller: _descCtrl,
+                  maxLines: 3,
+                  decoration: const InputDecoration(
+                    hintText: 'Brief description of the equipment and its purpose...',
+                  ),
                 ),
-                child: Row(
+                const SizedBox(height: 16),
+
+                // Category + Condition side by side
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    CircleAvatar(
-                      radius: 18,
-                      backgroundColor: sc.withOpacity(0.12),
-                      child: Text(e['student']![0],
-                          style: TextStyle(
-                              color: sc,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 14)),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _FieldLabel('Category *'),
+                          const SizedBox(height: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+                            decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: AppTheme.divider)),
+                            child: DropdownButtonHideUnderline(
+                              child: DropdownButton<String>(
+                                isExpanded: true,
+                                value: _selectedCategory,
+                                hint: const Text('Select', style: TextStyle(color: AppTheme.textLight, fontSize: 13)),
+                                items: _categories.map((c) => DropdownMenuItem(value: c, child: Text(c, style: const TextStyle(fontSize: 13)))).toList(),
+                                onChanged: (v) => setState(() => _selectedCategory = v),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(e['student']!,
-                              style: const TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 13,
-                                  color: AppTheme.textDark)),
-                          Text(
-                              '${e['item']}  •  Qty: ${e['qty']}  •  Due: ${e['due']}',
-                              style: const TextStyle(
-                                  fontSize: 11,
-                                  color: AppTheme.textMid)),
+                          _FieldLabel('Condition *'),
+                          const SizedBox(height: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+                            decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: AppTheme.divider)),
+                            child: DropdownButtonHideUnderline(
+                              child: DropdownButton<String>(
+                                isExpanded: true,
+                                value: _selectedCondition,
+                                hint: const Text('Select', style: TextStyle(color: AppTheme.textLight, fontSize: 13)),
+                                items: _conditions.map((c) => DropdownMenuItem(value: c, child: Text(c, style: const TextStyle(fontSize: 13)))).toList(),
+                                onChanged: (v) => setState(() => _selectedCondition = v),
+                              ),
+                            ),
+                          ),
                         ],
                       ),
                     ),
-                    StatusBadge(label: e['status']!, color: sc),
                   ],
                 ),
-              );
-            },
+                const SizedBox(height: 24),
+
+                _SectionDivider(
+                    icon: Icons.build_circle_outlined,
+                    label: 'Technical Details',
+                    color: AppTheme.primary),
+                const SizedBox(height: 16),
+
+                Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _FieldLabel('Brand / Manufacturer'),
+                          const SizedBox(height: 8),
+                          TextFormField(
+                            controller: _brandCtrl,
+                            decoration: const InputDecoration(hintText: 'e.g. Fluke'),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _FieldLabel('Model'),
+                          const SizedBox(height: 8),
+                          TextFormField(
+                            controller: _modelCtrl,
+                            decoration: const InputDecoration(hintText: 'e.g. 117'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+
+                _FieldLabel('Serial Number'),
+                const SizedBox(height: 8),
+                TextFormField(
+                  controller: _serialCtrl,
+                  decoration: const InputDecoration(
+                    hintText: 'e.g. SN-20241105-001',
+                    prefixIcon: Icon(Icons.tag_rounded, color: AppTheme.textMid),
+                  ),
+                ),
+                const SizedBox(height: 24),
+
+                _SectionDivider(
+                    icon: Icons.warehouse_outlined,
+                    label: 'Quantity & Location',
+                    color: AppTheme.primary),
+                const SizedBox(height: 16),
+
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SizedBox(
+                      width: 120,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _FieldLabel('Quantity *'),
+                          const SizedBox(height: 8),
+                          TextFormField(
+                            controller: _qtyCtrl,
+                            validator: _validateQty,
+                            keyboardType: TextInputType.number,
+                            textAlign: TextAlign.center,
+                            decoration: const InputDecoration(
+                              hintText: '1',
+                              prefixIcon: Icon(Icons.numbers_rounded, color: AppTheme.textMid),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _FieldLabel('Storage Location'),
+                          const SizedBox(height: 8),
+                          TextFormField(
+                            controller: _locationCtrl,
+                            decoration: const InputDecoration(
+                              hintText: 'e.g. Cabinet A, Shelf 2',
+                              prefixIcon: Icon(Icons.location_on_outlined, color: AppTheme.textMid),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 32),
+
+                // Info note
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: AppTheme.primary.withOpacity(0.06),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: AppTheme.primary.withOpacity(0.15)),
+                  ),
+                  child: const Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(Icons.qr_code_rounded, color: AppTheme.primary, size: 18),
+                      SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'A unique QR code will be automatically generated for this equipment after saving. You can print it from the equipment detail page.',
+                          style: TextStyle(fontSize: 12, color: AppTheme.textMid, height: 1.5),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 24),
+
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: _generateAndSubmit,
+                    icon: const Icon(Icons.qr_code_2_rounded),
+                    label: const Text('Generate QR & Save'),
+                  ),
+                ),
+              ],
+
+              if (_qrGenerated) ...[
+                // ══════════════════════════════════════════
+                // STEP 2 — QR Code Generated
+                // ══════════════════════════════════════════
+
+                // Summary card
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: AppTheme.primary,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Column(
+                    children: [
+                      Container(
+                        width: 52, height: 52,
+                        decoration: BoxDecoration(
+                          color: AppTheme.success.withOpacity(0.2),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(Icons.check_rounded, color: AppTheme.success, size: 28),
+                      ),
+                      const SizedBox(height: 12),
+                      Text(_nameCtrl.text,
+                          style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                          textAlign: TextAlign.center),
+                      const SizedBox(height: 4),
+                      Text('$_selectedCategory  ·  Qty: ${_qtyCtrl.text}',
+                          style: const TextStyle(color: AppTheme.textLight, fontSize: 13)),
+                      const SizedBox(height: 12),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: AppTheme.accent.withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Text(_generatedId,
+                            style: const TextStyle(
+                                color: AppTheme.accent,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                                letterSpacing: 2)),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 24),
+
+                // QR Code display
+                _SectionDivider(icon: Icons.qr_code_rounded, label: 'Generated QR Code', color: AppTheme.primary),
+                const SizedBox(height: 16),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(24),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: [BoxShadow(color: AppTheme.primary.withOpacity(0.08), blurRadius: 12, offset: const Offset(0, 4))],
+                  ),
+                  child: Column(
+                    children: [
+                      Container(
+                        width: 180, height: 180,
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          border: Border.all(color: AppTheme.divider, width: 2),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: CustomPaint(painter: _QrPlaceholderPainter()),
+                      ),
+                      const SizedBox(height: 14),
+                      Text(_generatedId,
+                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: AppTheme.textDark, letterSpacing: 1.5)),
+                      const SizedBox(height: 4),
+                      Text(_nameCtrl.text,
+                          style: const TextStyle(fontSize: 12, color: AppTheme.textMid)),
+                      const SizedBox(height: 20),
+                      // Action buttons
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: () {},
+                              icon: const Icon(Icons.share_outlined, size: 16),
+                              label: const Text('Share'),
+                              style: OutlinedButton.styleFrom(
+                                  foregroundColor: AppTheme.primary,
+                                  side: const BorderSide(color: AppTheme.primary),
+                                  padding: const EdgeInsets.symmetric(vertical: 12)),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              onPressed: () {},
+                              icon: const Icon(Icons.print_rounded, size: 16),
+                              label: const Text('Print QR'),
+                              style: ElevatedButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(vertical: 12)),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 24),
+
+                // Equipment summary table
+                _SectionDivider(icon: Icons.summarize_outlined, label: 'Registration Summary', color: AppTheme.primary),
+                const SizedBox(height: 12),
+                _DetailRow(label: 'Equipment Name', value: _nameCtrl.text),
+                _DetailRow(label: 'Equipment ID', value: _generatedId),
+                _DetailRow(label: 'Category', value: _selectedCategory ?? ''),
+                _DetailRow(label: 'Condition', value: _selectedCondition ?? ''),
+                _DetailRow(label: 'Quantity', value: '${_qtyCtrl.text} units'),
+                if (_brandCtrl.text.isNotEmpty) _DetailRow(label: 'Brand', value: _brandCtrl.text),
+                if (_modelCtrl.text.isNotEmpty) _DetailRow(label: 'Model', value: _modelCtrl.text),
+                if (_serialCtrl.text.isNotEmpty) _DetailRow(label: 'Serial No.', value: _serialCtrl.text),
+                if (_locationCtrl.text.isNotEmpty) _DetailRow(label: 'Location', value: _locationCtrl.text),
+                const SizedBox(height: 28),
+
+                // Confirm save
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: _confirmSave,
+                    icon: const Icon(Icons.check_circle_rounded),
+                    label: const Text('Confirm & Add to Inventory'),
+                    style: ElevatedButton.styleFrom(
+                        backgroundColor: AppTheme.success,
+                        padding: const EdgeInsets.symmetric(vertical: 14)),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: TextButton.icon(
+                    onPressed: () => setState(() => _qrGenerated = false),
+                    icon: const Icon(Icons.arrow_back_rounded, size: 16),
+                    label: const Text('Go Back & Edit'),
+                    style: TextButton.styleFrom(foregroundColor: AppTheme.textMid),
+                  ),
+                ),
+              ],
+            ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+// Progress steps widget shown at top of registration form
+class _ProgressSteps extends StatelessWidget {
+  final int step; // 1 or 2
+  const _ProgressSteps({required this.step});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        _Step(number: '1', label: 'Equipment Info', active: step >= 1, done: step > 1),
+        Expanded(child: Container(height: 2, color: step > 1 ? AppTheme.success : AppTheme.divider)),
+        _Step(number: '2', label: 'QR Code', active: step >= 2, done: false),
+      ],
+    );
+  }
+}
+
+class _Step extends StatelessWidget {
+  final String number, label;
+  final bool active, done;
+  const _Step({required this.number, required this.label, required this.active, required this.done});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = done ? AppTheme.success : (active ? AppTheme.primary : AppTheme.textLight);
+    return Column(
+      children: [
+        Container(
+          width: 32, height: 32,
+          decoration: BoxDecoration(
+            color: done ? AppTheme.success : (active ? AppTheme.primary : Colors.white),
+            shape: BoxShape.circle,
+            border: Border.all(color: color, width: 2),
+          ),
+          child: Center(
+            child: done
+                ? const Icon(Icons.check_rounded, color: Colors.white, size: 16)
+                : Text(number, style: TextStyle(color: active ? Colors.white : AppTheme.textLight, fontWeight: FontWeight.bold, fontSize: 13)),
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(label, style: TextStyle(fontSize: 10, color: color, fontWeight: active ? FontWeight.w600 : FontWeight.normal)),
       ],
     );
   }

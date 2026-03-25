@@ -1,7 +1,60 @@
 import 'package:flutter/material.dart';
+import 'firstFile.dart';
+import 'dart:convert';
+import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 
 void main() {
-  runApp(const MyApp());
+  runApp(const LabBorrowApp());
+}
+
+
+
+
+class EquipmentPage extends StatefulWidget {
+  @override
+  _EquipmentPageState createState() => _EquipmentPageState();
+}
+
+class _EquipmentPageState extends State<EquipmentPage> {
+  List equipmentList = [];
+
+  Future<void> fetchEquipment() async {
+    final response = await http.get(
+      Uri.parse('http://10.0.2.2/cea_backend/get_equipment.php')
+    );
+
+    if (response.statusCode == 200) {
+      setState(() {
+        equipmentList = json.decode(response.body);
+      });
+    } else {
+      print("Failed to load data");
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    fetchEquipment();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text("Equipment List")),
+      body: ListView.builder(
+        itemCount: equipmentList.length,
+        itemBuilder: (context, index) {
+          return ListTile(
+            title: Text(equipmentList[index]['equipment_name']),
+            subtitle: Text(equipmentList[index]['category']),
+            trailing: Text(equipmentList[index]['status']),
+          );
+        },
+      ),
+    );
+  }
 }
 
 class MyApp extends StatelessWidget {
