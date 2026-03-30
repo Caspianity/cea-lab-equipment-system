@@ -1669,7 +1669,7 @@ class _StudentDashboard extends StatelessWidget {
       body: CustomScrollView(
         slivers: [
           SliverAppBar(
-            expandedHeight: 180,
+            expandedHeight: 100,
             pinned: true,
             backgroundColor: AppTheme.primary,
             flexibleSpace: FlexibleSpaceBar(
@@ -1681,54 +1681,50 @@ class _StudentDashboard extends StatelessWidget {
                     colors: [AppTheme.primary, AppTheme.primaryDark],
                   ),
                 ),
-                padding: const EdgeInsets.fromLTRB(24, 60, 24, 20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.end,
+                padding: const EdgeInsets.fromLTRB(20, 44, 16, 12),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    Row(
+                    CircleAvatar(
+                      radius: 18,
+                      backgroundColor: AppTheme.accent.withOpacity(0.2),
+                      child: Text(Session.initials,
+                          style: const TextStyle(
+                              color: AppTheme.accent,
+                              fontSize: 13,
+                              fontWeight: FontWeight.bold)),
+                    ),
+                    const SizedBox(width: 10),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        CircleAvatar(
-                          radius: 22,
-                          backgroundColor: AppTheme.accent.withOpacity(0.2),
-                          child: const Text('JS',
-                              style: TextStyle(
-                                  color: AppTheme.accent,
-                                  fontWeight: FontWeight.bold)),
-                        ),
-                        const SizedBox(width: 12),
-                        const Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text('Good morning,',
-                                style: TextStyle(
-                                    color: AppTheme.textLight, fontSize: 12)),
-                            Text('Juan Santos',
-                                style: TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.bold)),
-                          ],
-                        ),
-                        const Spacer(),
-                        Stack(
-                          children: [
-                            IconButton(
-                                icon: const Icon(Icons.notifications_outlined,
-                                    color: Colors.white),
-                                onPressed: () {}),
-                            Positioned(
-                              right: 8,
-                              top: 8,
-                              child: Container(
-                                width: 8,
-                                height: 8,
-                                decoration: const BoxDecoration(
-                                    color: AppTheme.danger,
-                                    shape: BoxShape.circle),
-                              ),
-                            ),
-                          ],
+                        const Text('Good day,',
+                            style: TextStyle(color: AppTheme.textLight, fontSize: 11)),
+                        Text(Session.name,
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 15,
+                                fontWeight: FontWeight.bold)),
+                      ],
+                    ),
+                    const Spacer(),
+                    Stack(
+                      children: [
+                        IconButton(
+                            icon: const Icon(Icons.notifications_outlined,
+                                color: Colors.white, size: 22),
+                            onPressed: () {}),
+                        Positioned(
+                          right: 8,
+                          top: 8,
+                          child: Container(
+                            width: 7,
+                            height: 7,
+                            decoration: const BoxDecoration(
+                                color: AppTheme.danger,
+                                shape: BoxShape.circle),
+                          ),
                         ),
                       ],
                     ),
@@ -1765,6 +1761,24 @@ class _StudentDashboard extends StatelessWidget {
                           color: AppTheme.success),
                     ],
                   ),
+                  const SizedBox(height: 24),
+
+                  // Notifications — moved to top
+                  const SectionHeader(title: 'Notifications'),
+                  const SizedBox(height: 12),
+                  _NotificationCard(
+                      icon: Icons.check_circle_rounded,
+                      color: AppTheme.success,
+                      title: 'Request Approved',
+                      body: 'Your request for Soldering Kit has been approved.',
+                      time: '2h ago'),
+                  const SizedBox(height: 10),
+                  _NotificationCard(
+                      icon: Icons.access_alarm_rounded,
+                      color: AppTheme.warning,
+                      title: 'Due Date Reminder',
+                      body: 'Digital Multimeter is due back today at 5:00 PM.',
+                      time: '4h ago'),
                   const SizedBox(height: 24),
 
                   // Quick Actions
@@ -1824,24 +1838,6 @@ class _StudentDashboard extends StatelessWidget {
                       dueDate: 'Mar 7, 5:00 PM',
                       statusColor: AppTheme.success,
                       statusLabel: 'On Time'),
-                  const SizedBox(height: 24),
-
-                  // Notifications
-                  const SectionHeader(title: 'Notifications'),
-                  const SizedBox(height: 12),
-                  _NotificationCard(
-                      icon: Icons.check_circle_rounded,
-                      color: AppTheme.success,
-                      title: 'Request Approved',
-                      body: 'Your request for Soldering Kit has been approved.',
-                      time: '2h ago'),
-                  const SizedBox(height: 10),
-                  _NotificationCard(
-                      icon: Icons.access_alarm_rounded,
-                      color: AppTheme.warning,
-                      title: 'Due Date Reminder',
-                      body: 'Digital Multimeter is due back today at 5:00 PM.',
-                      time: '4h ago'),
                   const SizedBox(height: 20),
                 ],
               ),
