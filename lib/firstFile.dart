@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:mobile_scanner/mobile_scanner.dart';
 
 // ─── API Service ─────────────────────────────────────────────────────────────
 // 📱 IMPORTANT: Change this IP to your PC's local IP address.
@@ -8,7 +9,7 @@ import 'package:http/http.dart' as http;
 //    Example: http://192.168.1.5/cea_backend/api
 //    If using Android Emulator instead of a real phone, use: http://10.0.2.2/cea_backend/api
 class ApiService {
-  static const String baseUrl = 'http://192.168.1.5/cea_backend/api';
+  static const String baseUrl = 'http://192.168.1.4/cea_backend/api';
 
   static Future<Map<String, dynamic>> login(String identifier, String password, String role) async {
     final res = await http.post(
@@ -71,12 +72,29 @@ class ApiService {
       await Future.delayed(const Duration(milliseconds: 500));
       return {'success': true, 'message': 'Demo: Borrow request submitted!', 'transaction_id': 99};
     }
+    // Send as form data to avoid CORS preflight on Android
     final res = await http.post(
       Uri.parse('$baseUrl/borrow_equipment.php'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode(data),
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: data.map((k, v) => MapEntry(k, v.toString())),
     );
-    return jsonDecode(res.body);
+    final raw = res.body.trim();
+    final jsonStart = raw.indexOf('{');
+    if (jsonStart == -1) {
+      return {
+        'success': false,
+        'message': 'HTTP ${res.statusCode} — No JSON.\nBody: $raw'
+      };
+    }
+    try {
+      final decoded = jsonDecode(raw.substring(jsonStart));
+      if (res.statusCode == 500) {
+        return {'success': false, 'message': 'HTTP 500: ${decoded['message'] ?? raw}'};
+      }
+      return decoded;
+    } catch (e) {
+      return {'success': false, 'message': 'Parse error: $e\nRaw: $raw'};
+    }
   }
 
   static Future<Map<String, dynamic>> returnEquipment(int transactionId, String condition) async {
@@ -1787,15 +1805,6 @@ class _StudentDashboard extends StatelessWidget {
                   Row(
                     children: [
                       _QuickAction(
-                          icon: Icons.qr_code_scanner_rounded,
-                          label: 'Scan QR',
-                          color: AppTheme.primary,
-                          onTap: () => Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                  builder: (_) => const QRScanScreen()))),
-                      const SizedBox(width: 12),
-                      _QuickAction(
                           icon: Icons.add_circle_outline_rounded,
                           label: 'New Request',
                           color: AppTheme.accent,
@@ -1814,10 +1823,22 @@ class _StudentDashboard extends StatelessWidget {
                                   builder: (_) => const DamageReportScreen()))),
                       const SizedBox(width: 12),
                       _QuickAction(
+                          icon: Icons.receipt_long_rounded,
+                          label: 'My Loans',
+                          color: AppTheme.primary,
+                          onTap: () => Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                  builder: (_) => const MyBorrowingsScreen()))),
+                      const SizedBox(width: 12),
+                      _QuickAction(
                           icon: Icons.history_rounded,
                           label: 'History',
                           color: AppTheme.textMid,
-                          onTap: () {}),
+                          onTap: () => Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                  builder: (_) => const MyBorrowingsScreen()))),
                     ],
                   ),
                   const SizedBox(height: 24),
@@ -2082,6 +2103,7 @@ class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
   final _categories = ['Electronics', 'Optics', 'Measurement', 'Tools', 'Microcontroller'];
   bool _dropdownOpen = false;
   bool _loading = true;
+  bool _hasError = false;
   List<dynamic> _items = [];
 
   @override
@@ -2091,12 +2113,24 @@ class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
   }
 
   Future<void> _loadEquipment() async {
-    setState(() => _loading = true);
+    setState(() { _loading = true; _hasError = false; });
     try {
       final data = await ApiService.getEquipment();
       setState(() { _items = data; _loading = false; });
     } catch (e) {
-      setState(() => _loading = false);
+      setState(() { _loading = false; _hasError = true; });
+    }
+  }
+
+  // Returns an icon based on equipment category
+  IconData _equipmentIcon(String category) {
+    switch (category.toLowerCase()) {
+      case 'electronics':     return Icons.electric_bolt_rounded;
+      case 'tools':           return Icons.build_rounded;
+      case 'measurement':     return Icons.straighten_rounded;
+      case 'optics':          return Icons.remove_red_eye_rounded;
+      case 'microcontroller': return Icons.memory_rounded;
+      default:                return Icons.science_outlined;
     }
   }
 
@@ -2129,6 +2163,28 @@ class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
       appBar: AppBar(title: const Text('Equipment Catalog')),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
+          : _hasError
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(32),
+                    child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                      const Icon(Icons.wifi_off_rounded, size: 52, color: AppTheme.textLight),
+                      const SizedBox(height: 16),
+                      const Text('Failed to load equipment',
+                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppTheme.textDark)),
+                      const SizedBox(height: 8),
+                      const Text('Check your connection and make sure Laragon is running.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(fontSize: 13, color: AppTheme.textMid)),
+                      const SizedBox(height: 20),
+                      ElevatedButton.icon(
+                        onPressed: _loadEquipment,
+                        icon: const Icon(Icons.refresh_rounded),
+                        label: const Text('Try Again'),
+                      ),
+                    ]),
+                  ),
+                )
           : Column(
         children: [
           // Search + Filter
@@ -2430,18 +2486,25 @@ class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
               itemBuilder: (_, i) {
                 final e = filtered[i];
                 final isAvailable = (e['status'] ?? 'Available') == 'Available';
+                final category = e['category'] as String? ?? '';
                 return GestureDetector(
-                  onTap: () => Navigator.push(
+                  onTap: isAvailable ? () => Navigator.push(
                       context,
                       MaterialPageRoute(
                           builder: (_) => BorrowRequestScreen(
                               equipmentName: e['equipment_name'] as String,
-                              equipmentId: int.tryParse('${e['equipment_id']}') ?? 0))),
+                              equipmentId: int.tryParse('${e['equipment_id']}') ?? 0))) : null,
                   child: Container(
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(16),
+                      border: Border(
+                        left: BorderSide(
+                          color: isAvailable ? AppTheme.success : AppTheme.danger,
+                          width: 4,
+                        ),
+                      ),
                     ),
                     child: Row(
                       children: [
@@ -2449,11 +2512,12 @@ class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
                           width: 50,
                           height: 50,
                           decoration: BoxDecoration(
-                            color: AppTheme.primary.withOpacity(0.08),
+                            color: (isAvailable ? AppTheme.success : AppTheme.danger).withOpacity(0.10),
                             borderRadius: BorderRadius.circular(14),
                           ),
-                          child: const Icon(Icons.science_outlined,
-                              color: AppTheme.primary, size: 24),
+                          child: Icon(_equipmentIcon(category),
+                              color: isAvailable ? AppTheme.success : AppTheme.danger,
+                              size: 24),
                         ),
                         const SizedBox(width: 14),
                         Expanded(
@@ -2466,7 +2530,7 @@ class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
                                       fontSize: 14,
                                       color: AppTheme.textDark)),
                               const SizedBox(height: 2),
-                              Text('${e['qr_code']}  •  ${e['category']}',
+                              Text('${e['qr_code']}  •  $category',
                                   style: const TextStyle(
                                       fontSize: 12,
                                       color: AppTheme.textMid)),
@@ -2477,6 +2541,10 @@ class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
                                     label: e['status'] ?? 'Available',
                                     color: isAvailable ? AppTheme.success : AppTheme.danger,
                                   ),
+                                  if (e['location'] != null && e['location'].toString().isNotEmpty) ...[
+                                    const SizedBox(width: 6),
+                                    StatusBadge(label: e['location'], color: AppTheme.textMid),
+                                  ],
                                 ],
                               ),
                             ],
@@ -2514,7 +2582,6 @@ class BorrowRequestScreen extends StatefulWidget {
 }
 
 class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
-  DateTime? _returnDate;
   int _qty = 1;
   bool _loading = false;
   final _nameCtrl    = TextEditingController();
@@ -2522,10 +2589,15 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
   final _subjectCtrl = TextEditingController();
   final _purposeCtrl = TextEditingController();
 
+  // Auto due date — today at 5:00 PM
+  DateTime get _dueDate {
+    final now = DateTime.now();
+    return DateTime(now.year, now.month, now.day, 17, 0, 0);
+  }
+
   @override
   void initState() {
     super.initState();
-    // Pre-fill from session if available
     _nameCtrl.text = Session.name;
     _idCtrl.text   = Session.studentNumber;
   }
@@ -2545,11 +2617,6 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
         const SnackBar(content: Text('No equipment selected.'), backgroundColor: AppTheme.danger));
       return;
     }
-    if (_returnDate == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please select a return date.'), backgroundColor: AppTheme.danger));
-      return;
-    }
     setState(() => _loading = true);
     try {
       final res = await ApiService.borrowEquipment({
@@ -2560,7 +2627,7 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
         'subject':        _subjectCtrl.text.trim(),
         'quantity':       _qty,
         'borrow_date':    DateTime.now().toIso8601String(),
-        'due_date':       _returnDate!.toIso8601String(),
+        'due_date':       _dueDate.toIso8601String(),
         'purpose':        _purposeCtrl.text.trim(),
       });
       if (!mounted) return;
@@ -2570,19 +2637,31 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
             icon: const Icon(Icons.check_circle_rounded, color: AppTheme.success, size: 52),
             title: const Text('Request Submitted!'),
-            content: const Text('Your borrowing request has been submitted and is awaiting staff approval.',
+            content: const Text('Your borrowing request has been submitted and is awaiting staff approval. Please return the equipment before 5:00 PM today.',
                 textAlign: TextAlign.center),
             actions: [ElevatedButton(
               onPressed: () { Navigator.pop(context); Navigator.pop(context); },
               child: const Text('Done'))],
           ));
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(res['message'] ?? 'Failed to submit.'), backgroundColor: AppTheme.danger));
+        // Show full error in dialog so it can be read completely
+        showDialog(context: context,
+          builder: (_) => AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            icon: const Icon(Icons.error_outline_rounded, color: AppTheme.danger, size: 48),
+            title: const Text('Submission Failed'),
+            content: Text(res['message'] ?? 'Unknown error.',
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 13)),
+            actions: [ElevatedButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('OK'))],
+          ));
       }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Cannot connect to server.'), backgroundColor: AppTheme.danger));
+        SnackBar(content: Text('Error: ${e.toString()}'), backgroundColor: AppTheme.danger,
+            duration: const Duration(seconds: 6)));
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -2661,37 +2740,27 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
               ),
             ),
             const SizedBox(height: 16),
-            _FieldLabel('Return Date'),
-            const SizedBox(height: 8),
-            GestureDetector(
-              onTap: () async {
-                final d = await showDatePicker(
-                    context: context,
-                    initialDate: DateTime.now().add(const Duration(days: 1)),
-                    firstDate: DateTime.now(),
-                    lastDate: DateTime.now().add(const Duration(days: 30)));
-                if (d != null) setState(() => _returnDate = d);
-              },
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: AppTheme.divider)),
-                child: Row(
-                  children: [
-                    const Icon(Icons.calendar_today_rounded, color: AppTheme.textMid, size: 18),
-                    const SizedBox(width: 12),
-                    Text(
-                        _returnDate == null
-                            ? 'Select return date'
-                            : '${_returnDate!.month}/${_returnDate!.day}/${_returnDate!.year}',
-                        style: TextStyle(
-                            color: _returnDate == null ? AppTheme.textLight : AppTheme.textDark,
-                            fontSize: 14)),
-                  ],
-                ),
+            // Due time info — auto set to 5:00 PM today
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: AppTheme.warning.withOpacity(0.08),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppTheme.warning.withOpacity(0.3)),
               ),
+              child: Row(children: [
+                const Icon(Icons.access_time_rounded, color: AppTheme.warning, size: 20),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text('Return Deadline',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.warning)),
+                    SizedBox(height: 2),
+                    Text('All equipment must be returned today before 5:00 PM.',
+                        style: TextStyle(fontSize: 12, color: AppTheme.textDark)),
+                  ]),
+                ),
+              ]),
             ),
             const SizedBox(height: 16),
             _FieldLabel('Purpose / Notes'),
@@ -2722,176 +2791,359 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
 
 
 
-// ─── QR Scan Screen ───────────────────────────────────────────────────────────
+// ─── QR Scan Screen (Admin — Return Processing) ───────────────────────────────
 
-class QRScanScreen extends StatelessWidget {
+class QRScanScreen extends StatefulWidget {
   const QRScanScreen({super.key});
+  @override
+  State<QRScanScreen> createState() => _QRScanScreenState();
+}
+
+class _QRScanScreenState extends State<QRScanScreen> {
+  final MobileScannerController _controller = MobileScannerController();
+  bool _scanning = true;
+  bool _torchOn  = false;
+  final _manualCtrl = TextEditingController();
 
   @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppTheme.primary,
-      appBar: AppBar(
-          title: const Text('Scan QR / Barcode'),
-          backgroundColor: AppTheme.primary),
-      body: Stack(
-        children: [
-          // Simulated camera feed
+  void dispose() {
+    _controller.dispose();
+    _manualCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _onDetect(BarcodeCapture capture) async {
+    if (!_scanning) return;
+    final code = capture.barcodes.first.rawValue;
+    if (code == null || code.isEmpty) return;
+    setState(() => _scanning = false);
+    await _handleCode(code);
+  }
+
+  Future<void> _handleCode(String code) async {
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(
+        child: Card(
+          child: Padding(
+            padding: EdgeInsets.all(24),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              CircularProgressIndicator(),
+              SizedBox(height: 16),
+              Text('Looking up equipment...'),
+            ]),
+          ),
+        ),
+      ),
+    );
+
+    try {
+      final res = await ApiService.getEquipmentByQr(code);
+      if (!mounted) return;
+      Navigator.pop(context); // close loading
+
+      if (res['success'] == true) {
+        _showReturnSheet(res['data'] as Map<String, dynamic>);
+      } else {
+        _showNotFound(code);
+      }
+    } catch (e) {
+      if (!mounted) return;
+      Navigator.pop(context);
+      _showError();
+    }
+  }
+
+  void _showReturnSheet(Map<String, dynamic> equipment) {
+    final status      = equipment['status'] ?? 'Unknown';
+    final isBorrowed  = status == 'Borrowed';
+    final equipName   = equipment['equipment_name'] ?? '';
+    final equipId     = int.tryParse('${equipment['equipment_id']}') ?? 0;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => Container(
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          // Handle
+          Container(width: 40, height: 4,
+              decoration: BoxDecoration(color: AppTheme.divider,
+                  borderRadius: BorderRadius.circular(2))),
+          const SizedBox(height: 20),
+
+          // Equipment info
           Container(
-            color: AppTheme.primaryDark,
-            child: Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  // Scan frame
-                  Container(
-                    width: 240,
-                    height: 240,
-                    decoration: BoxDecoration(
-                      border: Border.all(color: AppTheme.accent, width: 2),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Stack(
-                      children: [
-                        // Corner marks
-                        ..._buildCorners(),
-                        Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(Icons.qr_code_scanner_rounded,
-                                  color: AppTheme.accent.withOpacity(0.3),
-                                  size: 80),
-                              const SizedBox(height: 8),
-                              Text('Point at QR code',
-                                  style: TextStyle(
-                                      color: AppTheme.accent.withOpacity(0.6),
-                                      fontSize: 13)),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 32),
-                  const Text('Align the QR code or barcode within the frame',
-                      style: TextStyle(color: AppTheme.textLight, fontSize: 13),
-                      textAlign: TextAlign.center),
-                  const SizedBox(height: 32),
-                  // Scan mode toggles
-                  Container(
-                    padding: const EdgeInsets.all(4),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        _ScanModeBtn(label: 'Check-Out', selected: true),
-                        _ScanModeBtn(label: 'Check-In', selected: false),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 24),
-                  // Manual entry
-                  TextButton.icon(
-                    onPressed: () {},
-                    icon: const Icon(Icons.keyboard_alt_outlined,
-                        color: AppTheme.accent),
-                    label: const Text('Enter ID manually',
-                        style: TextStyle(color: AppTheme.accent)),
-                  ),
-                ],
+            width: 60, height: 60,
+            decoration: BoxDecoration(
+                color: (isBorrowed ? AppTheme.warning : AppTheme.success).withOpacity(0.12),
+                borderRadius: BorderRadius.circular(16)),
+            child: Icon(Icons.science_outlined,
+                color: isBorrowed ? AppTheme.warning : AppTheme.success, size: 30),
+          ),
+          const SizedBox(height: 12),
+          Text(equipName,
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold,
+                  color: AppTheme.textDark),
+              textAlign: TextAlign.center),
+          const SizedBox(height: 4),
+          Text('${equipment['qr_code']}  •  ${equipment['category']}',
+              style: const TextStyle(fontSize: 13, color: AppTheme.textMid)),
+          const SizedBox(height: 12),
+
+          Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+            StatusBadge(
+                label: status,
+                color: isBorrowed ? AppTheme.warning : AppTheme.success),
+            if (equipment['location'] != null) ...[
+              const SizedBox(width: 8),
+              StatusBadge(label: equipment['location'], color: AppTheme.textMid),
+            ],
+          ]),
+          const SizedBox(height: 24),
+          const Divider(color: AppTheme.divider),
+          const SizedBox(height: 16),
+
+          // Action
+          if (isBorrowed) ...[
+            const Text('Confirm that the student has returned this equipment.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 13, color: AppTheme.textMid)),
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: () async {
+                  Navigator.pop(context); // close sheet
+                  try {
+                    await ApiService.returnEquipment(equipId, 'Good');
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                      content: Text('✅ "$equipName" marked as returned!'),
+                      backgroundColor: AppTheme.success,
+                      behavior: SnackBarBehavior.floating,
+                    ));
+                    setState(() => _scanning = true);
+                  } catch (_) {
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                      content: Text('Failed to update. Check connection.'),
+                      backgroundColor: AppTheme.danger,
+                      behavior: SnackBarBehavior.floating,
+                    ));
+                  }
+                },
+                icon: const Icon(Icons.assignment_return_rounded),
+                label: const Text('Confirm Return'),
+                style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.primary,
+                    padding: const EdgeInsets.symmetric(vertical: 14)),
               ),
             ),
+          ] else ...[
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                  color: AppTheme.success.withOpacity(0.08),
+                  borderRadius: BorderRadius.circular(12)),
+              child: const Row(children: [
+                Icon(Icons.info_outline_rounded, color: AppTheme.success, size: 18),
+                SizedBox(width: 10),
+                Expanded(child: Text(
+                  'This equipment is already Available — no return needed.',
+                  style: TextStyle(fontSize: 13, color: AppTheme.textDark),
+                )),
+              ]),
+            ),
+          ],
+
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: TextButton(
+              onPressed: () {
+                Navigator.pop(context);
+                setState(() => _scanning = true);
+              },
+              child: const Text('Scan Another'),
+            ),
+          ),
+        ]),
+      ),
+    ).then((_) => setState(() => _scanning = true));
+  }
+
+  void _showNotFound(String code) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        icon: const Icon(Icons.search_off_rounded, color: AppTheme.danger, size: 48),
+        title: const Text('Not Found'),
+        content: Text('No equipment found for:\n"$code"',
+            textAlign: TextAlign.center),
+        actions: [ElevatedButton(
+          onPressed: () { Navigator.pop(context); setState(() => _scanning = true); },
+          child: const Text('Scan Again'))],
+      ),
+    );
+  }
+
+  void _showError() {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        icon: const Icon(Icons.wifi_off_rounded, color: AppTheme.danger, size: 48),
+        title: const Text('Connection Error'),
+        content: const Text('Could not reach the server.',
+            textAlign: TextAlign.center),
+        actions: [ElevatedButton(
+          onPressed: () { Navigator.pop(context); setState(() => _scanning = true); },
+          child: const Text('Try Again'))],
+      ),
+    );
+  }
+
+  void _showManualEntry() {
+    _manualCtrl.clear();
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Enter QR Code Manually'),
+        content: TextField(
+          controller: _manualCtrl,
+          autofocus: true,
+          textCapitalization: TextCapitalization.characters,
+          decoration: const InputDecoration(
+              hintText: 'e.g. ELE-001',
+              prefixIcon: Icon(Icons.qr_code_rounded)),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel', style: TextStyle(color: AppTheme.textMid))),
+          ElevatedButton(
+            onPressed: () async {
+              final code = _manualCtrl.text.trim().toUpperCase();
+              if (code.isEmpty) return;
+              Navigator.pop(context);
+              setState(() => _scanning = false);
+              await _handleCode(code);
+            },
+            child: const Text('Look Up'),
           ),
         ],
       ),
     );
   }
 
-  List<Widget> _buildCorners() {
-    return [
-      Positioned(
-          top: 0,
-          left: 0,
-          child: _Corner(topLeft: true)),
-      Positioned(
-          top: 0,
-          right: 0,
-          child: _Corner(topRight: true)),
-      Positioned(
-          bottom: 0,
-          left: 0,
-          child: _Corner(bottomLeft: true)),
-      Positioned(
-          bottom: 0,
-          right: 0,
-          child: _Corner(bottomRight: true)),
-    ];
-  }
-}
-
-class _Corner extends StatelessWidget {
-  final bool topLeft, topRight, bottomLeft, bottomRight;
-  const _Corner(
-      {this.topLeft = false,
-      this.topRight = false,
-      this.bottomLeft = false,
-      this.bottomRight = false});
-
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: 24,
-      height: 24,
-      decoration: BoxDecoration(
-        border: Border(
-          top: (topLeft || topRight)
-              ? const BorderSide(color: AppTheme.accent, width: 3)
-              : BorderSide.none,
-          left: (topLeft || bottomLeft)
-              ? const BorderSide(color: AppTheme.accent, width: 3)
-              : BorderSide.none,
-          right: (topRight || bottomRight)
-              ? const BorderSide(color: AppTheme.accent, width: 3)
-              : BorderSide.none,
-          bottom: (bottomLeft || bottomRight)
-              ? const BorderSide(color: AppTheme.accent, width: 3)
-              : BorderSide.none,
-        ),
-        borderRadius: BorderRadius.only(
-          topLeft: topLeft ? const Radius.circular(4) : Radius.zero,
-          topRight: topRight ? const Radius.circular(4) : Radius.zero,
-          bottomLeft: bottomLeft ? const Radius.circular(4) : Radius.zero,
-          bottomRight: bottomRight ? const Radius.circular(4) : Radius.zero,
-        ),
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        title: const Text('Scan QR — Process Return'),
+        backgroundColor: Colors.black,
+        actions: [
+          IconButton(
+            icon: Icon(_torchOn ? Icons.flash_on_rounded : Icons.flash_off_rounded,
+                color: _torchOn ? AppTheme.accent : Colors.white),
+            onPressed: () {
+              _controller.toggleTorch();
+              setState(() => _torchOn = !_torchOn);
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.flip_camera_ios_rounded, color: Colors.white),
+            onPressed: () => _controller.switchCamera(),
+          ),
+        ],
+      ),
+      body: Stack(
+        children: [
+          // Live camera
+          MobileScanner(controller: _controller, onDetect: _onDetect),
+
+          // Overlay
+          CustomPaint(painter: _ScanOverlayPainter(), child: const SizedBox.expand()),
+
+          // Instructions + manual entry
+          Column(children: [
+            const Spacer(),
+            const Text('Scan equipment QR code to process return',
+                style: TextStyle(color: Colors.white70, fontSize: 13)),
+            const SizedBox(height: 220),
+            TextButton.icon(
+              onPressed: _showManualEntry,
+              icon: const Icon(Icons.keyboard_alt_outlined, color: AppTheme.accent),
+              label: const Text('Enter code manually',
+                  style: TextStyle(color: AppTheme.accent)),
+            ),
+            const SizedBox(height: 32),
+          ]),
+
+          // Loading overlay while processing
+          if (!_scanning)
+            Container(
+              color: Colors.black45,
+              child: const Center(child: CircularProgressIndicator(color: AppTheme.accent)),
+            ),
+        ],
       ),
     );
   }
 }
 
-class _ScanModeBtn extends StatelessWidget {
-  final String label;
-  final bool selected;
-  const _ScanModeBtn({required this.label, required this.selected});
+// ── Scan overlay painter ──────────────────────────────────────────────────────
+class _ScanOverlayPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    const boxSize = 260.0;
+    final cx = size.width / 2;
+    final cy = size.height / 2 - 60;
+    final rect = Rect.fromCenter(center: Offset(cx, cy), width: boxSize, height: boxSize);
+    final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(16));
+
+    final path = Path()
+      ..addRect(Rect.fromLTWH(0, 0, size.width, size.height))
+      ..addRRect(rrect)
+      ..fillType = PathFillType.evenOdd;
+    canvas.drawPath(path, Paint()..color = Colors.black.withOpacity(0.55));
+
+    canvas.drawRRect(rrect, Paint()
+      ..color = const Color(0xFFF5A623)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.5);
+
+    const cLen = 24.0;
+    final cp = Paint()
+      ..color = const Color(0xFFF5A623)
+      ..strokeWidth = 4
+      ..strokeCap = StrokeCap.round
+      ..style = PaintingStyle.stroke;
+
+    final l = rect.left; final t = rect.top;
+    final r = rect.right; final b = rect.bottom;
+    canvas.drawLine(Offset(l, t + cLen), Offset(l, t), cp);
+    canvas.drawLine(Offset(l, t), Offset(l + cLen, t), cp);
+    canvas.drawLine(Offset(r - cLen, t), Offset(r, t), cp);
+    canvas.drawLine(Offset(r, t), Offset(r, t + cLen), cp);
+    canvas.drawLine(Offset(l, b - cLen), Offset(l, b), cp);
+    canvas.drawLine(Offset(l, b), Offset(l + cLen, b), cp);
+    canvas.drawLine(Offset(r - cLen, b), Offset(r, b), cp);
+    canvas.drawLine(Offset(r, b), Offset(r, b - cLen), cp);
+  }
 
   @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-      decoration: BoxDecoration(
-        color: selected ? AppTheme.accent : Colors.transparent,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Text(label,
-          style: TextStyle(
-              color: selected ? Colors.white : AppTheme.textLight,
-              fontWeight: FontWeight.w600,
-              fontSize: 13)),
-    );
-  }
+  bool shouldRepaint(_) => false;
 }
 
 // ─── My Borrowings Screen ─────────────────────────────────────────────────────
@@ -4247,11 +4499,11 @@ class AdminDashboardScreen extends StatefulWidget {
 class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   int _currentIndex = 0;
 
-  final List<Widget> _pages = const [
-    _AdminHome(),
-    AdminRequestsScreen(),
-    AdminInventoryScreen(),
-    AdminReportsScreen(),
+  final List<Widget> _pages = [
+    const _AdminHome(),
+    const AdminRequestsScreen(),
+    const AdminInventoryScreen(),
+    const AdminReportsScreen(),
   ];
 
   void _confirmSignOut(BuildContext context) {
@@ -4361,149 +4613,351 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   }
 }
 
-class _AdminHome extends StatelessWidget {
+class _AdminHome extends StatefulWidget {
   const _AdminHome();
+  @override
+  State<_AdminHome> createState() => _AdminHomeState();
+}
+
+class _AdminHomeState extends State<_AdminHome> {
+  bool _loading = true;
+  Map<String, dynamic> _stats = {};
+  List<dynamic> _pending  = [];
+  List<dynamic> _approved = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    try {
+      final stats    = await ApiService.getDashboardStats();
+      final requests = await ApiService.getRequests();
+      setState(() {
+        _stats    = stats;
+        _pending  = requests.where((e) => e['status'] == 'Pending').toList();
+        _approved = requests.where((e) => e['status'] == 'Approved').toList();
+        _loading  = false;
+      });
+    } catch (_) {
+      setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _approve(int txId) async {
+    try {
+      await ApiService.updateRequestStatus(txId, 'approve');
+      _load();
+    } catch (_) {}
+  }
+
+  Future<void> _reject(int txId) async {
+    try {
+      await ApiService.updateRequestStatus(txId, 'reject');
+      _load();
+    } catch (_) {}
+  }
+
+  Future<void> _return(int txId, String equipmentName) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Confirm Return'),
+        content: Text('Mark "$equipmentName" as returned?'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel', style: TextStyle(color: AppTheme.textMid))),
+          ElevatedButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Confirm Return')),
+        ],
+      ),
+    );
+    if (confirm == true) {
+      try {
+        await ApiService.returnEquipment(txId, 'Good');
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Equipment marked as returned!'),
+          backgroundColor: AppTheme.success,
+          behavior: SnackBarBehavior.floating,
+        ));
+        _load();
+      } catch (_) {}
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: CustomScrollView(
-        slivers: [
-          SliverAppBar(
-            expandedHeight: 160,
-            pinned: true,
-            backgroundColor: AppTheme.primary,
-            automaticallyImplyLeading: false,
-            flexibleSpace: FlexibleSpaceBar(
-              background: Container(
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [AppTheme.primary, AppTheme.primaryDark],
+      body: RefreshIndicator(
+        onRefresh: _load,
+        child: CustomScrollView(
+          slivers: [
+            SliverAppBar(
+              expandedHeight: 160,
+              pinned: true,
+              backgroundColor: AppTheme.primary,
+              automaticallyImplyLeading: false,
+              flexibleSpace: FlexibleSpaceBar(
+                background: Container(
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [AppTheme.primary, AppTheme.primaryDark],
+                    ),
                   ),
-                ),
-                padding: const EdgeInsets.fromLTRB(24, 60, 24, 20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    Row(
-                      children: [
+                  padding: const EdgeInsets.fromLTRB(24, 60, 24, 20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      Row(children: [
                         Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 4),
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                           decoration: BoxDecoration(
-                            color: AppTheme.accent.withOpacity(0.2),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
+                              color: AppTheme.accent.withOpacity(0.2),
+                              borderRadius: BorderRadius.circular(8)),
                           child: const Text('ADMIN',
-                              style: TextStyle(
-                                  color: AppTheme.accent,
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.bold,
-                                  letterSpacing: 1)),
+                              style: TextStyle(color: AppTheme.accent, fontSize: 11,
+                                  fontWeight: FontWeight.bold, letterSpacing: 1)),
                         ),
                         const SizedBox(width: 10),
-                        const Text('Maria Cruz',
-                            style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 20,
+                        Text(Session.name,
+                            style: const TextStyle(color: Colors.white, fontSize: 20,
                                 fontWeight: FontWeight.bold)),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    const Text('CEA Laboratory · New Era University',
-                        style: TextStyle(
-                            color: AppTheme.textLight, fontSize: 12)),
-                  ],
+                      ]),
+                      const SizedBox(height: 4),
+                      const Text('CEA Laboratory · New Era University',
+                          style: TextStyle(color: AppTheme.textLight, fontSize: 12)),
+                    ],
+                  ),
                 ),
               ),
             ),
-          ),
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Admin stat grid — explicit rows, no aspect ratio
-                  IntrinsicHeight(
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Expanded(child: _AdminStatCard(
-                            label: 'Pending Requests',
-                            value: '5',
-                            icon: Icons.pending_actions_rounded,
-                            color: AppTheme.accent)),
-                        const SizedBox(width: 12),
-                        Expanded(child: _AdminStatCard(
-                            label: 'Active Loans',
-                            value: '18',
-                            icon: Icons.inventory_2_rounded,
-                            color: AppTheme.success)),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  IntrinsicHeight(
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Expanded(child: _AdminStatCard(
-                            label: 'Overdue Items',
-                            value: '3',
-                            icon: Icons.warning_amber_rounded,
-                            color: AppTheme.danger)),
-                        const SizedBox(width: 12),
-                        Expanded(child: _AdminStatCard(
-                            label: 'Total Equipment',
-                            value: '64',
-                            icon: Icons.science_rounded,
-                            color: AppTheme.primary)),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 24),
 
-                  // Pending Requests
-                  SectionHeader(
-                      title: 'Pending Approvals',
-                      action: 'View all',
-                      onAction: () {}),
-                  const SizedBox(height: 12),
-                  _AdminRequestCard(
-                      student: 'Juan Santos',
-                      studentId: '2024-00123',
-                      item: 'Digital Multimeter',
-                      dueDate: 'Mar 7'),
-                  const SizedBox(height: 10),
-                  _AdminRequestCard(
-                      student: 'Ana Reyes',
-                      studentId: '2024-00145',
-                      item: 'Oscilloscope',
-                      dueDate: 'Mar 8'),
-                  const SizedBox(height: 24),
+            if (_loading)
+              const SliverFillRemaining(
+                child: Center(child: CircularProgressIndicator()))
+            else
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // ── Live Stats ──
+                      IntrinsicHeight(
+                        child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                          Expanded(child: _AdminStatCard(
+                              label: 'Pending Requests',
+                              value: '${_stats['pending_requests'] ?? 0}',
+                              icon: Icons.pending_actions_rounded,
+                              color: AppTheme.accent)),
+                          const SizedBox(width: 12),
+                          Expanded(child: _AdminStatCard(
+                              label: 'Active Loans',
+                              value: '${_stats['active_loans'] ?? 0}',
+                              icon: Icons.inventory_2_rounded,
+                              color: AppTheme.success)),
+                        ]),
+                      ),
+                      const SizedBox(height: 12),
+                      IntrinsicHeight(
+                        child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                          Expanded(child: _AdminStatCard(
+                              label: 'Overdue Items',
+                              value: '${_stats['overdue_loans'] ?? 0}',
+                              icon: Icons.warning_amber_rounded,
+                              color: AppTheme.danger)),
+                          const SizedBox(width: 12),
+                          Expanded(child: _AdminStatCard(
+                              label: 'Total Equipment',
+                              value: '${_stats['total_equipment'] ?? 0}',
+                              icon: Icons.science_rounded,
+                              color: AppTheme.primary)),
+                        ]),
+                      ),
+                      const SizedBox(height: 24),
 
-                  // Overdue alerts
-                  const SectionHeader(title: 'Overdue Alerts'),
-                  const SizedBox(height: 12),
-                  _OverdueCard(
-                      student: 'Carlo Lim',
-                      item: 'Soldering Kit',
-                      overdueDays: 2),
-                  const SizedBox(height: 10),
-                  _OverdueCard(
-                      student: 'Bea Torres',
-                      item: 'Vernier Caliper',
-                      overdueDays: 1),
-                  const SizedBox(height: 20),
-                ],
+                      // ── Scan QR for Return ──
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          onPressed: () => Navigator.push(context,
+                              MaterialPageRoute(builder: (_) => const QRScanScreen())),
+                          icon: const Icon(Icons.qr_code_scanner_rounded),
+                          label: const Text('Scan QR to Process Return'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppTheme.primary,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+
+                      // ── Pending Approvals ──
+                      SectionHeader(
+                          title: 'Pending Approvals (${_pending.length})',
+                          action: 'View all',
+                          onAction: () {}),
+                      const SizedBox(height: 12),
+                      if (_pending.isEmpty)
+                        Container(
+                          padding: const EdgeInsets.all(20),
+                          decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(16)),
+                          child: const Center(
+                            child: Column(children: [
+                              Icon(Icons.check_circle_outline_rounded,
+                                  color: AppTheme.success, size: 36),
+                              SizedBox(height: 8),
+                              Text('No pending requests',
+                                  style: TextStyle(color: AppTheme.textMid, fontSize: 13)),
+                            ]),
+                          ),
+                        )
+                      else
+                        ..._pending.map((e) {
+                          final txId = int.tryParse('${e['transaction_id']}') ?? 0;
+                          final name = e['borrower_name'] ?? e['student_number'] ?? 'Student';
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 10),
+                            child: Container(
+                              padding: const EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(16),
+                                  border: Border.all(color: AppTheme.accent.withOpacity(0.2))),
+                              child: Column(children: [
+                                Row(children: [
+                                  CircleAvatar(
+                                    radius: 18,
+                                    backgroundColor: AppTheme.accent.withOpacity(0.1),
+                                    child: Text(name.isNotEmpty ? name[0].toUpperCase() : '?',
+                                        style: const TextStyle(color: AppTheme.accent,
+                                            fontWeight: FontWeight.bold)),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                    Text(name, style: const TextStyle(
+                                        fontWeight: FontWeight.bold, fontSize: 13,
+                                        color: AppTheme.textDark)),
+                                    Text('${e['equipment_name']}  •  Qty: ${e['quantity'] ?? 1}',
+                                        style: const TextStyle(fontSize: 11, color: AppTheme.textMid)),
+                                  ])),
+                                  StatusBadge(label: 'Pending', color: AppTheme.accent),
+                                ]),
+                                const SizedBox(height: 12),
+                                const Divider(color: AppTheme.divider, height: 1),
+                                const SizedBox(height: 10),
+                                Row(children: [
+                                  Expanded(child: OutlinedButton.icon(
+                                    onPressed: () => _reject(txId),
+                                    icon: const Icon(Icons.close_rounded, size: 16),
+                                    label: const Text('Deny'),
+                                    style: OutlinedButton.styleFrom(
+                                        foregroundColor: AppTheme.danger,
+                                        side: const BorderSide(color: AppTheme.danger)),
+                                  )),
+                                  const SizedBox(width: 10),
+                                  Expanded(child: ElevatedButton.icon(
+                                    onPressed: () => _approve(txId),
+                                    icon: const Icon(Icons.check_rounded, size: 16),
+                                    label: const Text('Approve'),
+                                    style: ElevatedButton.styleFrom(
+                                        backgroundColor: AppTheme.success),
+                                  )),
+                                ]),
+                              ]),
+                            ),
+                          );
+                        }),
+                      const SizedBox(height: 24),
+
+                      // ── Active Loans (Approved — awaiting return) ──
+                      SectionHeader(
+                          title: 'Active Loans (${_approved.length})',
+                          action: 'View all',
+                          onAction: () {}),
+                      const SizedBox(height: 12),
+                      if (_approved.isEmpty)
+                        Container(
+                          padding: const EdgeInsets.all(20),
+                          decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(16)),
+                          child: const Center(
+                            child: Text('No active loans',
+                                style: TextStyle(color: AppTheme.textMid, fontSize: 13)),
+                          ),
+                        )
+                      else
+                        ..._approved.map((e) {
+                          final txId = int.tryParse('${e['transaction_id']}') ?? 0;
+                          final name = e['borrower_name'] ?? e['student_number'] ?? 'Student';
+                          final equipName = e['equipment_name'] ?? 'Equipment';
+                          final dueDate = (e['due_date'] ?? '').toString().split('T').first;
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 10),
+                            child: Container(
+                              padding: const EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(16),
+                                  border: Border.all(color: AppTheme.success.withOpacity(0.2))),
+                              child: Column(children: [
+                                Row(children: [
+                                  Container(
+                                    width: 40, height: 40,
+                                    decoration: BoxDecoration(
+                                        color: AppTheme.success.withOpacity(0.1),
+                                        borderRadius: BorderRadius.circular(10)),
+                                    child: const Icon(Icons.science_outlined,
+                                        color: AppTheme.success, size: 20),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                    Text(equipName, style: const TextStyle(
+                                        fontWeight: FontWeight.bold, fontSize: 13,
+                                        color: AppTheme.textDark)),
+                                    Text('$name  •  Due: $dueDate',
+                                        style: const TextStyle(fontSize: 11, color: AppTheme.textMid)),
+                                  ])),
+                                  StatusBadge(label: 'Active', color: AppTheme.success),
+                                ]),
+                                const SizedBox(height: 12),
+                                const Divider(color: AppTheme.divider, height: 1),
+                                const SizedBox(height: 10),
+                                SizedBox(
+                                  width: double.infinity,
+                                  child: ElevatedButton.icon(
+                                    onPressed: () => _return(txId, equipName),
+                                    icon: const Icon(Icons.assignment_return_rounded, size: 16),
+                                    label: const Text('Mark as Returned'),
+                                    style: ElevatedButton.styleFrom(
+                                        backgroundColor: AppTheme.primary),
+                                  ),
+                                ),
+                              ]),
+                            ),
+                          );
+                        }),
+                      const SizedBox(height: 20),
+                    ],
+                  ),
+                ),
               ),
-            ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -4841,6 +5295,7 @@ class AdminInventoryScreen extends StatefulWidget {
 class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
   List<dynamic> _equipment = [];
   bool _loading = true;
+  bool _hasError = false;
   String _search = '';
   String _filter = 'All';
   final _categories = ['All', 'Electronics', 'Optics', 'Measurement', 'Tools', 'Microcontroller'];
@@ -4849,24 +5304,56 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
   void initState() { super.initState(); _load(); }
 
   Future<void> _load() async {
-    setState(() => _loading = true);
+    setState(() { _loading = true; _hasError = false; });
     try {
       final data = await ApiService.getEquipment();
       setState(() { _equipment = data; _loading = false; });
-    } catch (_) { setState(() => _loading = false); }
+    } catch (_) { setState(() { _loading = false; _hasError = true; }); }
   }
 
   Color _conditionColor(String c) {
     switch (c) {
-      case 'Available':   return AppTheme.success;
-      case 'Borrowed':    return AppTheme.warning;
-      default:            return AppTheme.textMid;
+      case 'Available': return AppTheme.success;
+      case 'Borrowed':  return AppTheme.warning;
+      default:          return AppTheme.textMid;
+    }
+  }
+
+  IconData _equipmentIcon(String category) {
+    switch (category.toLowerCase()) {
+      case 'electronics':     return Icons.electric_bolt_rounded;
+      case 'tools':           return Icons.build_rounded;
+      case 'measurement':     return Icons.straighten_rounded;
+      case 'optics':          return Icons.remove_red_eye_rounded;
+      case 'microcontroller': return Icons.memory_rounded;
+      default:                return Icons.science_outlined;
     }
   }
 
   @override
   Widget build(BuildContext context) {
     if (_loading) return const Center(child: CircularProgressIndicator());
+
+    if (_hasError) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+            const Icon(Icons.wifi_off_rounded, size: 52, color: AppTheme.textLight),
+            const SizedBox(height: 16),
+            const Text('Failed to load inventory',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppTheme.textDark)),
+            const SizedBox(height: 8),
+            const Text('Check your connection and make sure Laragon is running.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 13, color: AppTheme.textMid)),
+            const SizedBox(height: 20),
+            ElevatedButton.icon(onPressed: _load,
+                icon: const Icon(Icons.refresh_rounded), label: const Text('Try Again')),
+          ]),
+        ),
+      );
+    }
 
     final filtered = _equipment.where((e) {
       final matchCat = _filter == 'All' || e['category'] == _filter;
@@ -5001,9 +5488,10 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
                                 width: 48,
                                 height: 48,
                                 decoration: BoxDecoration(
-                                    color: AppTheme.primary.withOpacity(0.08),
+                                    color: condColor.withOpacity(0.10),
                                     borderRadius: BorderRadius.circular(12)),
-                                child: const Icon(Icons.science_outlined, color: AppTheme.primary, size: 24),
+                                child: Icon(_equipmentIcon(e['category'] as String? ?? ''),
+                                    color: condColor, size: 24),
                               ),
                               const SizedBox(width: 14),
                               // Info
