@@ -1,175 +1,395 @@
 import 'package:flutter/material.dart';
-import 'dart:convert';
-import 'package:http/http.dart' as http;
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'firebase_options.dart';
 
-// ─── API Service ─────────────────────────────────────────────────────────────
-// 📱 IMPORTANT: Change this IP to your PC's local IP address.
-//    Find it by running `ipconfig` in CMD and looking for IPv4 Address.
-//    Example: http://192.168.1.5/cea_backend/api
-//    If using Android Emulator instead of a real phone, use: http://10.0.2.2/cea_backend/api
+// ─── Firebase Service ─────────────────────────────────────────────────────────
 class ApiService {
-  static const String baseUrl = 'http://192.168.1.4/cea_backend/api';
+  static final _auth = FirebaseAuth.instance;
+  static final _db   = FirebaseFirestore.instance;
 
-  static Future<Map<String, dynamic>> login(String identifier, String password, String role) async {
-    final res = await http.post(
-      Uri.parse('$baseUrl/login.php'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'identifier': identifier, 'password': password, 'role': role}),
-    );
-    return jsonDecode(res.body);
+  // ── Auth ──────────────────────────────────────────────────────────────────
+  static Future<Map<String, dynamic>> login(
+      String identifier, String password, String role) async {
+    try {
+      if (role == 'student') {
+        // Students login with student_number → find their email first
+        final snap = await _db
+            .collection('students')
+            .where('student_number', isEqualTo: identifier)
+            .limit(1)
+            .get();
+        if (snap.docs.isEmpty) {
+          return {'success': false, 'message': 'Student ID not found.'};
+        }
+        final studentData = snap.docs.first.data();
+        final email = studentData['email'] as String;
+        await _auth.signInWithEmailAndPassword(email: email, password: password);
+        final user = {...studentData, 'student_id': snap.docs.first.id};
+        return {'success': true, 'role': 'student', 'user': user};
+      } else {
+        // Staff login with email
+        await _auth.signInWithEmailAndPassword(
+            email: identifier, password: password);
+        final uid  = _auth.currentUser!.uid;
+        final snap = await _db.collection('staff').doc(uid).get();
+        if (!snap.exists) {
+          // Check by email if doc not found by uid
+          final q = await _db
+              .collection('staff')
+              .where('email', isEqualTo: identifier)
+              .limit(1)
+              .get();
+          if (q.docs.isEmpty) {
+            return {'success': false, 'message': 'Staff account not found.'};
+          }
+          final data = {...q.docs.first.data(), 'staff_id': q.docs.first.id};
+          return {'success': true, 'role': 'staff', 'user': data};
+        }
+        final data = {...snap.data()!, 'staff_id': uid};
+        return {'success': true, 'role': 'staff', 'user': data};
+      }
+    } on FirebaseAuthException catch (e) {
+      String msg = 'Login failed.';
+      if (e.code == 'wrong-password' || e.code == 'invalid-credential')
+        msg = 'Incorrect password.';
+      else if (e.code == 'user-not-found') msg = 'Account not found.';
+      else if (e.code == 'too-many-requests')
+        msg = 'Too many attempts. Try again later.';
+      return {'success': false, 'message': msg};
+    } catch (e) {
+      return {'success': false, 'message': e.toString()};
+    }
   }
 
-  static Future<Map<String, dynamic>> registerStudent(Map<String, dynamic> data) async {
-    final res = await http.post(
-      Uri.parse('$baseUrl/register_student.php'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode(data),
-    );
-    return jsonDecode(res.body);
+  static Future<Map<String, dynamic>> registerStudent(
+      Map<String, dynamic> data) async {
+    try {
+      final email    = data['email'] as String;
+      final password = data['password'] as String;
+      final name     = '${data['first_name']} ${data['last_name']}';
+      final studentNumber = data['student_number'] as String;
+
+      // Step 1: Create Firebase Auth user first
+      UserCredential cred;
+      try {
+        cred = await _auth.createUserWithEmailAndPassword(
+            email: email, password: password);
+      } on FirebaseAuthException catch (e) {
+        if (e.code == 'email-already-in-use')
+          return {'success': false, 'message': 'Email is already registered.'};
+        if (e.code == 'weak-password')
+          return {'success': false, 'message': 'Password must be at least 6 characters.'};
+        return {'success': false, 'message': e.message ?? 'Registration failed.'};
+      }
+
+      final uid = cred.user!.uid;
+
+      // Step 2: Now authenticated — check student_number uniqueness
+      try {
+        final existing = await _db
+            .collection('students')
+            .where('student_number', isEqualTo: studentNumber)
+            .limit(1)
+            .get();
+        if (existing.docs.isNotEmpty) {
+          // Delete the auth user we just created since student_number is taken
+          await cred.user!.delete();
+          return {'success': false, 'message': 'Student ID is already registered.'};
+        }
+      } catch (_) {
+        // If the uniqueness check fails, still allow — better to have
+        // a duplicate than block valid registrations
+      }
+
+      // Step 3: Save student profile to Firestore
+      await _db.collection('students').doc(uid).set({
+        'name':           name,
+        'email':          email,
+        'student_number': studentNumber,
+        'course':         data['course'] ?? '',
+        'year_level':     data['year_level'] ?? 1,
+        'created_at':     FieldValue.serverTimestamp(),
+      });
+
+      // Step 4: Sign out after registration so they go back to login screen
+      await _auth.signOut();
+
+      return {
+        'success':    true,
+        'message':    'Account created successfully.',
+        'student_id': uid,
+      };
+    } catch (e) {
+      return {'success': false, 'message': e.toString()};
+    }
   }
 
-  static Future<List<dynamic>> getEquipment({String search = '', String category = ''}) async {
-    // Demo mode — return sample data without hitting the server
+  // ── Equipment ─────────────────────────────────────────────────────────────
+  static Future<List<dynamic>> getEquipment(
+      {String search = '', String category = ''}) async {
     if (Session.isDemoMode) {
       await Future.delayed(const Duration(milliseconds: 400));
       var data = Session.demoEquipment;
-      if (search.isNotEmpty) {
-        data = data.where((e) =>
-          (e['equipment_name'] as String).toLowerCase().contains(search.toLowerCase())).toList();
-      }
-      if (category.isNotEmpty) {
+      if (search.isNotEmpty)
+        data = data
+            .where((e) => (e['equipment_name'] as String)
+                .toLowerCase()
+                .contains(search.toLowerCase()))
+            .toList();
+      if (category.isNotEmpty)
         data = data.where((e) => e['category'] == category).toList();
-      }
       return data;
     }
-    final uri = Uri.parse('$baseUrl/get_equipment.php').replace(
-      queryParameters: {
-        if (search.isNotEmpty) 'search': search,
-        if (category.isNotEmpty) 'category': category,
-      },
-    );
-    final res = await http.get(uri);
-    final body = jsonDecode(res.body);
-    return body['data'] ?? [];
+    Query q = _db.collection('equipment').orderBy('equipment_name');
+    final snap = await q.get();
+    List<dynamic> items = snap.docs.map((d) {
+      final data = d.data() as Map<String, dynamic>;
+      return {...data, 'equipment_id': d.id};
+    }).toList();
+    if (search.isNotEmpty)
+      items = items
+          .where((e) => (e['equipment_name'] as String)
+              .toLowerCase()
+              .contains(search.toLowerCase()))
+          .toList();
+    if (category.isNotEmpty)
+      items = items.where((e) => e['category'] == category).toList();
+    return items;
   }
 
   static Future<Map<String, dynamic>> getEquipmentByQr(String qrCode) async {
     if (Session.isDemoMode) {
       await Future.delayed(const Duration(milliseconds: 300));
-      final match = Session.demoEquipment.where((e) => e['qr_code'] == qrCode).toList();
-      if (match.isEmpty) return {'success': false, 'message': 'Equipment not found.'};
+      final match =
+          Session.demoEquipment.where((e) => e['qr_code'] == qrCode).toList();
+      if (match.isEmpty)
+        return {'success': false, 'message': 'Equipment not found.'};
       return {'success': true, 'data': match.first};
     }
-    final uri = Uri.parse('$baseUrl/get_equipment_by_qr.php')
-        .replace(queryParameters: {'qr_code': qrCode});
-    final res = await http.get(uri);
-    return jsonDecode(res.body);
+    final snap = await _db
+        .collection('equipment')
+        .where('qr_code', isEqualTo: qrCode)
+        .limit(1)
+        .get();
+    if (snap.docs.isEmpty)
+      return {'success': false, 'message': 'Equipment not found.'};
+    final data = {
+      ...snap.docs.first.data() as Map<String, dynamic>,
+      'equipment_id': snap.docs.first.id
+    };
+    return {'success': true, 'data': data};
   }
 
-  static Future<Map<String, dynamic>> borrowEquipment(Map<String, dynamic> data) async {
+  static Future<Map<String, dynamic>> addEquipment(
+      Map<String, dynamic> data) async {
+    try {
+      final name     = data['equipment_name'] as String;
+      final category = data['category'] as String;
+      final location = data['location'] ?? '';
+      // Auto-generate QR code
+      final prefix  = category.substring(0, 3).toUpperCase();
+      final suffix  = DateTime.now().millisecondsSinceEpoch.toString().substring(7);
+      final qrCode  = '$prefix-$suffix';
+      final ref = await _db.collection('equipment').add({
+        'equipment_name': name,
+        'category':       category,
+        'location':       location,
+        'qr_code':        qrCode,
+        'status':         'Available',
+        'created_at':     FieldValue.serverTimestamp(),
+      });
+      return {
+        'success':      true,
+        'message':      'Equipment added successfully.',
+        'equipment_id': ref.id,
+        'qr_code':      qrCode,
+      };
+    } catch (e) {
+      return {'success': false, 'message': e.toString()};
+    }
+  }
+
+  // ── Borrow / Return ───────────────────────────────────────────────────────
+  static Future<Map<String, dynamic>> borrowEquipment(
+      Map<String, dynamic> data) async {
     if (Session.isDemoMode) {
       await Future.delayed(const Duration(milliseconds: 500));
-      return {'success': true, 'message': 'Demo: Borrow request submitted!', 'transaction_id': 99};
-    }
-    // Send as form data to avoid CORS preflight on Android
-    final res = await http.post(
-      Uri.parse('$baseUrl/borrow_equipment.php'),
-      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-      body: data.map((k, v) => MapEntry(k, v.toString())),
-    );
-    final raw = res.body.trim();
-    final jsonStart = raw.indexOf('{');
-    if (jsonStart == -1) {
       return {
-        'success': false,
-        'message': 'HTTP ${res.statusCode} — No JSON.\nBody: $raw'
+        'success': true,
+        'message': 'Demo: Borrow request submitted!',
+        'transaction_id': 'demo-99'
       };
     }
     try {
-      final decoded = jsonDecode(raw.substring(jsonStart));
-      if (res.statusCode == 500) {
-        return {'success': false, 'message': 'HTTP 500: ${decoded['message'] ?? raw}'};
-      }
-      return decoded;
+      final equipId = data['equipment_id'].toString();
+      // Check equipment is Available
+      final eqDoc = await _db.collection('equipment').doc(equipId).get();
+      if (!eqDoc.exists)
+        return {'success': false, 'message': 'Equipment not found.'};
+      final eqData = eqDoc.data() as Map<String, dynamic>;
+      if (eqData['status'] != 'Available')
+        return {
+          'success': false,
+          'message': 'Equipment is currently ${eqData['status']}.'
+        };
+
+      final due = DateTime.now();
+      final dueDate = DateTime(due.year, due.month, due.day, 17, 0, 0);
+      final ref = await _db.collection('borrow_transactions').add({
+        'student_id':     data['student_id'].toString(),
+        'equipment_id':   equipId,
+        'equipment_name': eqData['equipment_name'],
+        'qr_code':        eqData['qr_code'],
+        'borrower_name':  data['borrower_name'] ?? '',
+        'student_number': data['student_number'] ?? '',
+        'subject':        data['subject'] ?? '',
+        'quantity':       data['quantity'] ?? 1,
+        'purpose':        data['purpose'] ?? '',
+        'borrow_date':    FieldValue.serverTimestamp(),
+        'due_date':       Timestamp.fromDate(dueDate),
+        'return_date':    null,
+        'status':         'Pending',
+      });
+      return {
+        'success':        true,
+        'message':        'Borrow request submitted successfully.',
+        'transaction_id': ref.id,
+      };
     } catch (e) {
-      return {'success': false, 'message': 'Parse error: $e\nRaw: $raw'};
+      return {'success': false, 'message': e.toString()};
     }
   }
 
-  static Future<Map<String, dynamic>> returnEquipment(int transactionId, String condition) async {
+  static Future<Map<String, dynamic>> returnEquipment(
+      dynamic transactionId, String condition) async {
     if (Session.isDemoMode) {
       await Future.delayed(const Duration(milliseconds: 400));
       return {'success': true, 'message': 'Demo: Equipment returned!'};
     }
-    final res = await http.post(
-      Uri.parse('$baseUrl/return_equipment.php'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'transaction_id': transactionId, 'condition_returned': condition}),
-    );
-    return jsonDecode(res.body);
+    try {
+      final txDoc =
+          await _db.collection('borrow_transactions').doc('$transactionId').get();
+      if (!txDoc.exists)
+        return {'success': false, 'message': 'Transaction not found.'};
+      final equipId =
+          (txDoc.data() as Map<String, dynamic>)['equipment_id'] as String;
+      // Update transaction
+      await _db.collection('borrow_transactions').doc('$transactionId').update({
+        'status':             'Returned',
+        'return_date':        FieldValue.serverTimestamp(),
+        'condition_returned': condition,
+      });
+      // Update equipment back to Available
+      await _db
+          .collection('equipment')
+          .doc(equipId)
+          .update({'status': 'Available'});
+      return {'success': true, 'message': 'Equipment returned successfully.'};
+    } catch (e) {
+      return {'success': false, 'message': e.toString()};
+    }
   }
 
-  static Future<List<dynamic>> getMyBorrowings({int studentId = 0, String studentNumber = ''}) async {
+  // ── Transactions ──────────────────────────────────────────────────────────
+  static Future<List<dynamic>> getMyBorrowings(
+      {dynamic studentId = 0, String studentNumber = ''}) async {
     if (Session.isDemoMode) {
       await Future.delayed(const Duration(milliseconds: 400));
       return Session.demoBorrowings;
     }
-    final uri = Uri.parse('$baseUrl/get_my_borrowings.php').replace(
-      queryParameters: {
-        if (studentId > 0) 'student_id': '$studentId',
-        if (studentNumber.isNotEmpty) 'student_number': studentNumber,
-      },
-    );
-    final res = await http.get(uri);
-    final body = jsonDecode(res.body);
-    return body['data'] ?? [];
+    final sid = Session.currentUser?['student_id']?.toString() ?? '';
+    final snap = await _db
+        .collection('borrow_transactions')
+        .where('student_id', isEqualTo: sid)
+        .orderBy('borrow_date', descending: true)
+        .get();
+    return snap.docs.map((d) {
+      final data = d.data();
+      return {
+        ...data,
+        'transaction_id': d.id,
+        'due_date': (data['due_date'] as Timestamp?)
+                ?.toDate()
+                .toIso8601String() ??
+            '',
+        'borrow_date': (data['borrow_date'] as Timestamp?)
+                ?.toDate()
+                .toIso8601String() ??
+            '',
+      };
+    }).toList();
   }
 
   static Future<List<dynamic>> getRequests({String status = ''}) async {
     if (Session.isDemoMode) {
       await Future.delayed(const Duration(milliseconds: 400));
       if (status.isEmpty || status == 'All') return Session.demoRequests;
-      return Session.demoRequests.where((e) => e['status'] == status).toList();
+      return Session.demoRequests
+          .where((e) => e['status'] == status)
+          .toList();
     }
-    final uri = Uri.parse('$baseUrl/get_requests.php')
-        .replace(queryParameters: {'status': status});
-    final res = await http.get(uri);
-    final body = jsonDecode(res.body);
-    return body['data'] ?? [];
+    Query q = _db
+        .collection('borrow_transactions')
+        .orderBy('borrow_date', descending: true);
+    if (status.isNotEmpty) q = q.where('status', isEqualTo: status);
+    final snap = await q.get();
+    return snap.docs.map((d) {
+      final data = d.data() as Map<String, dynamic>;
+      return {
+        ...data,
+        'transaction_id': d.id,
+        'due_date': (data['due_date'] as Timestamp?)
+                ?.toDate()
+                .toIso8601String() ??
+            '',
+        'borrow_date': (data['borrow_date'] as Timestamp?)
+                ?.toDate()
+                .toIso8601String() ??
+            '',
+      };
+    }).toList();
   }
 
-  static Future<Map<String, dynamic>> updateRequestStatus(int transactionId, String action) async {
+  static Future<Map<String, dynamic>> updateRequestStatus(
+      dynamic transactionId, String action) async {
     if (Session.isDemoMode) {
       await Future.delayed(const Duration(milliseconds: 400));
       return {'success': true, 'message': 'Demo: Status updated!'};
     }
-    final res = await http.post(
-      Uri.parse('$baseUrl/update_request_status.php'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'transaction_id': transactionId, 'action': action}),
-    );
-    return jsonDecode(res.body);
+    try {
+      final txDoc =
+          await _db.collection('borrow_transactions').doc('$transactionId').get();
+      if (!txDoc.exists)
+        return {'success': false, 'message': 'Transaction not found.'};
+      final equipId =
+          (txDoc.data() as Map<String, dynamic>)['equipment_id'] as String;
+
+      if (action == 'approve') {
+        await _db
+            .collection('borrow_transactions')
+            .doc('$transactionId')
+            .update({'status': 'Approved'});
+        await _db
+            .collection('equipment')
+            .doc(equipId)
+            .update({'status': 'Borrowed'});
+        return {'success': true, 'message': 'Request approved.'};
+      } else {
+        await _db
+            .collection('borrow_transactions')
+            .doc('$transactionId')
+            .update({'status': 'Rejected'});
+        return {'success': true, 'message': 'Request rejected.'};
+      }
+    } catch (e) {
+      return {'success': false, 'message': e.toString()};
+    }
   }
 
-  static Future<Map<String, dynamic>> addEquipment(Map<String, dynamic> data) async {
-    final res = await http.post(
-      Uri.parse('$baseUrl/add_equipment.php'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode(data),
-    );
-    return jsonDecode(res.body);
-  }
-
-  static Future<Map<String, dynamic>> submitDamageReport(Map<String, dynamic> data) async {
-    final res = await http.post(
-      Uri.parse('$baseUrl/submit_damage_report.php'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode(data),
-    );
-    return jsonDecode(res.body);
-  }
-
+  // ── Dashboard Stats ───────────────────────────────────────────────────────
   static Future<Map<String, dynamic>> getDashboardStats() async {
     if (Session.isDemoMode) {
       await Future.delayed(const Duration(milliseconds: 300));
@@ -182,28 +402,67 @@ class ApiService {
         'damage_reports':      1,
       };
     }
-    final res = await http.get(Uri.parse('$baseUrl/get_dashboard_stats.php'));
-    final body = jsonDecode(res.body);
-    return body['data'] ?? {};
+    try {
+      final eqSnap  = await _db.collection('equipment').get();
+      final txSnap  = await _db.collection('borrow_transactions').get();
+      final total   = eqSnap.docs.length;
+      final avail   = eqSnap.docs.where((d) => d['status'] == 'Available').length;
+      final pending = txSnap.docs.where((d) => d['status'] == 'Pending').length;
+      final active  = txSnap.docs.where((d) => d['status'] == 'Approved').length;
+      final now     = DateTime.now();
+      final overdue = txSnap.docs.where((d) {
+        if (d['status'] != 'Approved') return false;
+        final due = (d['due_date'] as Timestamp?)?.toDate();
+        return due != null && due.isBefore(now);
+      }).length;
+      return {
+        'pending_requests':    pending,
+        'active_loans':        active,
+        'overdue_loans':       overdue,
+        'total_equipment':     total,
+        'available_equipment': avail,
+        'damage_reports':      0,
+      };
+    } catch (e) {
+      return {};
+    }
   }
 
+  // ── Damage Report ─────────────────────────────────────────────────────────
+  static Future<Map<String, dynamic>> submitDamageReport(
+      Map<String, dynamic> data) async {
+    try {
+      final ref = await _db.collection('damage_reports').add({
+        ...data,
+        'reported_at': FieldValue.serverTimestamp(),
+      });
+      return {
+        'success':   true,
+        'message':   'Damage report submitted successfully.',
+        'report_id': ref.id,
+      };
+    } catch (e) {
+      return {'success': false, 'message': e.toString()};
+    }
+  }
+
+  // ── Update Profile ────────────────────────────────────────────────────────
   static Future<Map<String, dynamic>> updateProfile({
-    required int studentId,
+    required dynamic studentId,
     required String name,
     required String course,
     required int yearLevel,
   }) async {
-    final res = await http.post(
-      Uri.parse('$baseUrl/update_profile.php'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'student_id': studentId,
+    try {
+      await _db.collection('students').doc('$studentId').update({
         'name':       name,
         'course':     course,
         'year_level': yearLevel,
-      }),
-    );
-    return jsonDecode(res.body);
+      });
+      return {'success': true, 'message': 'Profile updated successfully.'};
+    } catch (e) {
+      return {'success': false, 'message': e.toString()};
+    }
   }
 }
 
@@ -262,7 +521,11 @@ class Session {
   ];
 }
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
   runApp(const LabBorrowApp());
 }
 
@@ -654,12 +917,10 @@ class _LoginScreenState extends State<LoginScreen> {
     } catch (e) {
       final msg = e.toString();
       String userMsg;
-      if (msg.contains('SocketException') || msg.contains('Connection refused') || msg.contains('Network')) {
-        userMsg = 'Cannot reach server. Make sure:\n• Laragon is running\n• Your IP in ApiService.baseUrl is correct\n• Phone and PC are on the same Wi-Fi';
-      } else if (msg.contains('TimeoutException')) {
-        userMsg = 'Connection timed out. Check your IP address and Wi-Fi.';
-      } else if (msg.contains('FormatException') || msg.contains('SyntaxError')) {
-        userMsg = 'Server returned an error. Check your PHP files for syntax errors.';
+      if (msg.contains('network') || msg.contains('Network') || msg.contains('unavailable')) {
+        userMsg = 'No internet connection. Please check your Wi-Fi or mobile data.';
+      } else if (msg.contains('timeout') || msg.contains('Timeout')) {
+        userMsg = 'Connection timed out. Please try again.';
       } else {
         userMsg = 'Error: $msg';
       }
@@ -842,15 +1103,15 @@ class _LoginScreenState extends State<LoginScreen> {
                             } catch (e) {
                               if (!context.mounted) return;
                               ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                                content: Text('❌ Cannot connect. Current IP: ${ApiService.baseUrl}'),
+                                content: Text('❌ Cannot connect to Firebase: ${e.toString()}'),
                                 backgroundColor: AppTheme.danger,
                                 behavior: SnackBarBehavior.floating,
                                 duration: const Duration(seconds: 5),
                               ));
                             }
                           },
-                          icon: const Icon(Icons.wifi_rounded, size: 16),
-                          label: const Text('Test Server Connection'),
+                          icon: const Icon(Icons.cloud_rounded, size: 16),
+                          label: const Text('Test Firebase Connection'),
                           style: OutlinedButton.styleFrom(
                             foregroundColor: AppTheme.textMid,
                             side: const BorderSide(color: AppTheme.divider),
@@ -1607,11 +1868,11 @@ class StudentHomeScreen extends StatefulWidget {
 class _StudentHomeScreenState extends State<StudentHomeScreen> {
   int _currentIndex = 0;
 
-  final List<Widget> _pages = const [
-    _StudentDashboard(),
-    EquipmentCatalogScreen(),
-    MyBorrowingsScreen(),
-    ProfileScreen(),
+  final List<Widget> _pages = [
+    const _StudentDashboard(),
+    const EquipmentCatalogScreen(),
+    const MyBorrowingsScreen(),
+    const ProfileScreen(),
   ];
 
   @override
@@ -1677,194 +1938,350 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
 
 // ─── Student Dashboard ────────────────────────────────────────────────────────
 
-class _StudentDashboard extends StatelessWidget {
+class _StudentDashboard extends StatefulWidget {
   const _StudentDashboard();
+  @override
+  State<_StudentDashboard> createState() => _StudentDashboardState();
+}
+
+class _StudentDashboardState extends State<_StudentDashboard> {
+  bool _loading = true;
+  List<dynamic> _allLoans = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    try {
+      final loans = await ApiService.getMyBorrowings(
+        studentId: Session.studentId,
+        studentNumber: Session.studentNumber,
+      );
+      setState(() { _allLoans = loans; _loading = false; });
+    } catch (_) {
+      setState(() => _loading = false);
+    }
+  }
+
+  // Derive stats from live loans
+  List<dynamic> get _activeLoans =>
+      _allLoans.where((e) => e['status'] == 'Approved').toList();
+  List<dynamic> get _pendingLoans =>
+      _allLoans.where((e) => e['status'] == 'Pending').toList();
+
+  int get _dueToday => _activeLoans.where((e) {
+    final due = DateTime.tryParse('${e['due_date']}'.replaceAll(' ', 'T'));
+    if (due == null) return false;
+    final now = DateTime.now();
+    return due.year == now.year && due.month == now.month && due.day == now.day;
+  }).length;
+
+  int get _overdue => _activeLoans.where((e) {
+    final due = DateTime.tryParse('${e['due_date']}'.replaceAll(' ', 'T'));
+    if (due == null) return false;
+    return due.isBefore(DateTime.now());
+  }).length;
+
+  // Build notification cards from live loan statuses
+  List<Map<String, dynamic>> get _notifications {
+    final notes = <Map<String, dynamic>>[];
+    for (final loan in _allLoans) {
+      final status   = loan['status'] ?? '';
+      final equipName= loan['equipment_name'] ?? 'Equipment';
+      final due      = DateTime.tryParse('${loan['due_date']}'.replaceAll(' ', 'T'));
+      final now      = DateTime.now();
+
+      if (status == 'Approved' && due != null) {
+        if (due.year == now.year && due.month == now.month && due.day == now.day) {
+          notes.add({
+            'icon':  Icons.access_alarm_rounded,
+            'color': AppTheme.warning,
+            'title': 'Due Today',
+            'body':  '$equipName is due back today before 5:00 PM.',
+          });
+        } else if (due.isBefore(now)) {
+          notes.add({
+            'icon':  Icons.warning_amber_rounded,
+            'color': AppTheme.danger,
+            'title': 'Overdue!',
+            'body':  '$equipName was due on ${due.month}/${due.day}. Please return it immediately.',
+          });
+        }
+      }
+      if (status == 'Approved' && due != null && !due.isBefore(now)) {
+        notes.add({
+          'icon':  Icons.check_circle_rounded,
+          'color': AppTheme.success,
+          'title': 'Request Approved',
+          'body':  'Your request for $equipName has been approved.',
+        });
+      }
+      if (status == 'Rejected') {
+        notes.add({
+          'icon':  Icons.cancel_rounded,
+          'color': AppTheme.danger,
+          'title': 'Request Rejected',
+          'body':  'Your request for $equipName was rejected by staff.',
+        });
+      }
+    }
+    return notes;
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppTheme.surface,
-      body: CustomScrollView(
-        slivers: [
-          SliverAppBar(
-            expandedHeight: 100,
-            pinned: true,
-            backgroundColor: AppTheme.primary,
-            flexibleSpace: FlexibleSpaceBar(
-              background: Container(
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [AppTheme.primary, AppTheme.primaryDark],
-                  ),
-                ),
-                padding: const EdgeInsets.fromLTRB(20, 44, 16, 12),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    CircleAvatar(
-                      radius: 18,
-                      backgroundColor: AppTheme.accent.withOpacity(0.2),
-                      child: Text(Session.initials,
-                          style: const TextStyle(
-                              color: AppTheme.accent,
-                              fontSize: 13,
-                              fontWeight: FontWeight.bold)),
+      body: RefreshIndicator(
+        onRefresh: _load,
+        child: CustomScrollView(
+          slivers: [
+            SliverAppBar(
+              expandedHeight: 100,
+              pinned: true,
+              backgroundColor: AppTheme.primary,
+              flexibleSpace: FlexibleSpaceBar(
+                background: Container(
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [AppTheme.primary, AppTheme.primaryDark],
                     ),
-                    const SizedBox(width: 10),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const Text('Good day,',
-                            style: TextStyle(color: AppTheme.textLight, fontSize: 11)),
-                        Text(Session.name,
+                  ),
+                  padding: const EdgeInsets.fromLTRB(20, 44, 16, 12),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      CircleAvatar(
+                        radius: 18,
+                        backgroundColor: AppTheme.accent.withOpacity(0.2),
+                        child: Text(Session.initials,
                             style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 15,
+                                color: AppTheme.accent,
+                                fontSize: 13,
                                 fontWeight: FontWeight.bold)),
-                      ],
-                    ),
-                    const Spacer(),
-                    Stack(
-                      children: [
-                        IconButton(
-                            icon: const Icon(Icons.notifications_outlined,
-                                color: Colors.white, size: 22),
-                            onPressed: () {}),
-                        Positioned(
-                          right: 8,
-                          top: 8,
-                          child: Container(
-                            width: 7,
-                            height: 7,
-                            decoration: const BoxDecoration(
-                                color: AppTheme.danger,
-                                shape: BoxShape.circle),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
+                      ),
+                      const SizedBox(width: 10),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Text('Good day,',
+                              style: TextStyle(color: AppTheme.textLight, fontSize: 11)),
+                          Text(Session.name,
+                              style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.bold)),
+                        ],
+                      ),
+                      const Spacer(),
+                      Stack(
+                        children: [
+                          IconButton(
+                              icon: const Icon(Icons.notifications_outlined,
+                                  color: Colors.white, size: 22),
+                              onPressed: () {}),
+                          if (_notifications.isNotEmpty)
+                            Positioned(
+                              right: 8, top: 8,
+                              child: Container(
+                                width: 7, height: 7,
+                                decoration: const BoxDecoration(
+                                    color: AppTheme.danger,
+                                    shape: BoxShape.circle),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
-          ),
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Quick Stats
-                  Row(
+
+            if (_loading)
+              const SliverFillRemaining(
+                child: Center(child: CircularProgressIndicator()))
+            else
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _StatCard(
-                          label: 'Active Loans',
-                          value: '2',
-                          icon: Icons.inventory_2_rounded,
-                          color: AppTheme.accent),
-                      const SizedBox(width: 12),
-                      _StatCard(
-                          label: 'Due Today',
-                          value: '1',
-                          icon: Icons.schedule_rounded,
-                          color: AppTheme.warning),
-                      const SizedBox(width: 12),
-                      _StatCard(
-                          label: 'Overdue',
-                          value: '0',
-                          icon: Icons.warning_amber_rounded,
-                          color: AppTheme.success),
+                      // ── Live Stats ──
+                      Row(children: [
+                        _StatCard(
+                            label: 'Active Loans',
+                            value: '${_activeLoans.length}',
+                            icon: Icons.inventory_2_rounded,
+                            color: AppTheme.accent),
+                        const SizedBox(width: 12),
+                        _StatCard(
+                            label: 'Due Today',
+                            value: '$_dueToday',
+                            icon: Icons.schedule_rounded,
+                            color: AppTheme.warning),
+                        const SizedBox(width: 12),
+                        _StatCard(
+                            label: 'Overdue',
+                            value: '$_overdue',
+                            icon: Icons.warning_amber_rounded,
+                            color: _overdue > 0 ? AppTheme.danger : AppTheme.success),
+                      ]),
+                      const SizedBox(height: 24),
+
+                      // ── Live Notifications ──
+                      const SectionHeader(title: 'Notifications'),
+                      const SizedBox(height: 12),
+                      if (_notifications.isEmpty)
+                        Container(
+                          padding: const EdgeInsets.all(20),
+                          decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(16)),
+                          child: const Center(
+                            child: Column(children: [
+                              Icon(Icons.notifications_none_rounded,
+                                  size: 36, color: AppTheme.textLight),
+                              SizedBox(height: 8),
+                              Text('No notifications',
+                                  style: TextStyle(color: AppTheme.textMid, fontSize: 13)),
+                            ]),
+                          ),
+                        )
+                      else
+                        ..._notifications.map((n) => Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: _NotificationCard(
+                            icon:  n['icon'] as IconData,
+                            color: n['color'] as Color,
+                            title: n['title'] as String,
+                            body:  n['body']  as String,
+                            time:  'Now',
+                          ),
+                        )),
+                      const SizedBox(height: 24),
+
+                      // ── Quick Actions ──
+                      const SectionHeader(title: 'Quick Actions'),
+                      const SizedBox(height: 12),
+                      Row(children: [
+                        _QuickAction(
+                            icon: Icons.add_circle_outline_rounded,
+                            label: 'New Request',
+                            color: AppTheme.accent,
+                            onTap: () => Navigator.push(context,
+                                MaterialPageRoute(builder: (_) => const BorrowRequestScreen()))),
+                        const SizedBox(width: 12),
+                        _QuickAction(
+                            icon: Icons.report_problem_outlined,
+                            label: 'Report',
+                            color: AppTheme.warning,
+                            onTap: () => Navigator.push(context,
+                                MaterialPageRoute(builder: (_) => const DamageReportScreen()))),
+                        const SizedBox(width: 12),
+                        _QuickAction(
+                            icon: Icons.receipt_long_rounded,
+                            label: 'My Loans',
+                            color: AppTheme.primary,
+                            onTap: () => Navigator.push(context,
+                                MaterialPageRoute(builder: (_) => const MyBorrowingsScreen()))),
+                        const SizedBox(width: 12),
+                        _QuickAction(
+                            icon: Icons.history_rounded,
+                            label: 'History',
+                            color: AppTheme.textMid,
+                            onTap: () => Navigator.push(context,
+                                MaterialPageRoute(builder: (_) => const MyBorrowingsScreen()))),
+                      ]),
+                      const SizedBox(height: 24),
+
+                      // ── Live Active Loans ──
+                      SectionHeader(
+                          title: 'Active Loans',
+                          action: _activeLoans.isNotEmpty ? 'See all' : null,
+                          onAction: () => Navigator.push(context,
+                              MaterialPageRoute(builder: (_) => const MyBorrowingsScreen()))),
+                      const SizedBox(height: 12),
+                      if (_activeLoans.isEmpty && _pendingLoans.isEmpty)
+                        Container(
+                          padding: const EdgeInsets.all(20),
+                          decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(16)),
+                          child: const Center(
+                            child: Column(children: [
+                              Icon(Icons.inventory_2_outlined,
+                                  size: 36, color: AppTheme.textLight),
+                              SizedBox(height: 8),
+                              Text('No active loans',
+                                  style: TextStyle(color: AppTheme.textMid, fontSize: 13)),
+                            ]),
+                          ),
+                        )
+                      else ...[
+                        // Show pending first
+                        ..._pendingLoans.take(2).map((e) {
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 10),
+                            child: _LoanCard(
+                              name: e['equipment_name'] ?? '',
+                              id:   e['qr_code'] ?? '',
+                              dueDate: 'Awaiting approval',
+                              statusColor: AppTheme.accent,
+                              statusLabel: 'Pending',
+                            ),
+                          );
+                        }),
+                        // Then active/approved
+                        ..._activeLoans.take(3).map((e) {
+                          final due = DateTime.tryParse(
+                              '${e['due_date']}'.replaceAll(' ', 'T'));
+                          final now = DateTime.now();
+                          final isOverdue = due != null && due.isBefore(now);
+                          final isDueToday = due != null &&
+                              due.year == now.year &&
+                              due.month == now.month &&
+                              due.day == now.day;
+                          final statusLabel = isOverdue
+                              ? 'Overdue'
+                              : isDueToday
+                                  ? 'Due Today'
+                                  : 'Active';
+                          final statusColor = isOverdue
+                              ? AppTheme.danger
+                              : isDueToday
+                                  ? AppTheme.warning
+                                  : AppTheme.success;
+                          final dueStr = due != null
+                              ? '${due.month}/${due.day}, 5:00 PM'
+                              : '';
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 10),
+                            child: _LoanCard(
+                              name: e['equipment_name'] ?? '',
+                              id:   e['qr_code'] ?? '',
+                              dueDate: dueStr,
+                              statusColor: statusColor,
+                              statusLabel: statusLabel,
+                            ),
+                          );
+                        }),
+                      ],
+                      const SizedBox(height: 20),
                     ],
                   ),
-                  const SizedBox(height: 24),
-
-                  // Notifications — moved to top
-                  const SectionHeader(title: 'Notifications'),
-                  const SizedBox(height: 12),
-                  _NotificationCard(
-                      icon: Icons.check_circle_rounded,
-                      color: AppTheme.success,
-                      title: 'Request Approved',
-                      body: 'Your request for Soldering Kit has been approved.',
-                      time: '2h ago'),
-                  const SizedBox(height: 10),
-                  _NotificationCard(
-                      icon: Icons.access_alarm_rounded,
-                      color: AppTheme.warning,
-                      title: 'Due Date Reminder',
-                      body: 'Digital Multimeter is due back today at 5:00 PM.',
-                      time: '4h ago'),
-                  const SizedBox(height: 24),
-
-                  // Quick Actions
-                  const SectionHeader(title: 'Quick Actions'),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      _QuickAction(
-                          icon: Icons.add_circle_outline_rounded,
-                          label: 'New Request',
-                          color: AppTheme.accent,
-                          onTap: () => Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                  builder: (_) => const BorrowRequestScreen()))),
-                      const SizedBox(width: 12),
-                      _QuickAction(
-                          icon: Icons.report_problem_outlined,
-                          label: 'Report',
-                          color: AppTheme.warning,
-                          onTap: () => Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                  builder: (_) => const DamageReportScreen()))),
-                      const SizedBox(width: 12),
-                      _QuickAction(
-                          icon: Icons.receipt_long_rounded,
-                          label: 'My Loans',
-                          color: AppTheme.primary,
-                          onTap: () => Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                  builder: (_) => const MyBorrowingsScreen()))),
-                      const SizedBox(width: 12),
-                      _QuickAction(
-                          icon: Icons.history_rounded,
-                          label: 'History',
-                          color: AppTheme.textMid,
-                          onTap: () => Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                  builder: (_) => const MyBorrowingsScreen()))),
-                    ],
-                  ),
-                  const SizedBox(height: 24),
-
-                  // Active Loans
-                  const SectionHeader(title: 'Active Loans', action: 'See all'),
-                  const SizedBox(height: 12),
-                  _LoanCard(
-                      name: 'Digital Multimeter',
-                      id: 'EQ-0042',
-                      dueDate: 'Today, 5:00 PM',
-                      statusColor: AppTheme.warning,
-                      statusLabel: 'Due Soon'),
-                  const SizedBox(height: 10),
-                  _LoanCard(
-                      name: 'Oscilloscope',
-                      id: 'EQ-0018',
-                      dueDate: 'Mar 7, 5:00 PM',
-                      statusColor: AppTheme.success,
-                      statusLabel: 'On Time'),
-                  const SizedBox(height: 20),
-                ],
+                ),
               ),
-            ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -2589,6 +3006,10 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
   final _subjectCtrl = TextEditingController();
   final _purposeCtrl = TextEditingController();
 
+  // Selected equipment — starts from widget props or empty
+  int    _selectedEquipmentId   = 0;
+  String _selectedEquipmentName = '';
+
   // Auto due date — today at 5:00 PM
   DateTime get _dueDate {
     final now = DateTime.now();
@@ -2600,6 +3021,9 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
     super.initState();
     _nameCtrl.text = Session.name;
     _idCtrl.text   = Session.studentNumber;
+    // Pre-fill if coming from catalog
+    _selectedEquipmentId   = widget.equipmentId;
+    _selectedEquipmentName = widget.equipmentName ?? '';
   }
 
   @override
@@ -2611,17 +3035,149 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
     super.dispose();
   }
 
+  // Opens a bottom sheet to pick equipment from the catalog
+  Future<void> _pickEquipment() async {
+    List<dynamic> items = [];
+    bool loading = true;
+
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) {
+          // Load equipment on first open
+          if (loading) {
+            ApiService.getEquipment().then((data) {
+              setSheetState(() {
+                items = data.where((e) => e['status'] == 'Available').toList();
+                loading = false;
+              });
+            }).catchError((_) => setSheetState(() => loading = false));
+          }
+
+          return Container(
+            height: MediaQuery.of(context).size.height * 0.75,
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+            ),
+            child: Column(children: [
+              // Handle
+              Container(
+                margin: const EdgeInsets.only(top: 12),
+                width: 40, height: 4,
+                decoration: BoxDecoration(
+                    color: AppTheme.divider,
+                    borderRadius: BorderRadius.circular(2)),
+              ),
+              const SizedBox(height: 12),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 20),
+                child: Row(children: [
+                  Icon(Icons.science_outlined, color: AppTheme.primary, size: 20),
+                  SizedBox(width: 10),
+                  Text('Select Equipment',
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold,
+                          color: AppTheme.textDark)),
+                ]),
+              ),
+              const SizedBox(height: 4),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 20),
+                child: Text('Only available equipment is shown.',
+                    style: TextStyle(fontSize: 12, color: AppTheme.textMid)),
+              ),
+              const SizedBox(height: 12),
+              const Divider(color: AppTheme.divider, height: 1),
+              Expanded(
+                child: loading
+                    ? const Center(child: CircularProgressIndicator())
+                    : items.isEmpty
+                        ? const Center(
+                            child: Text('No available equipment.',
+                                style: TextStyle(color: AppTheme.textMid)))
+                        : ListView.separated(
+                            padding: const EdgeInsets.all(16),
+                            itemCount: items.length,
+                            separatorBuilder: (_, __) => const SizedBox(height: 8),
+                            itemBuilder: (_, i) {
+                              final e = items[i];
+                              final isSelected = _selectedEquipmentId ==
+                                  int.tryParse('${e['equipment_id']}');
+                              return GestureDetector(
+                                onTap: () {
+                                  setState(() {
+                                    _selectedEquipmentId   = int.tryParse('${e['equipment_id']}') ?? 0;
+                                    _selectedEquipmentName = e['equipment_name'] as String;
+                                  });
+                                  Navigator.pop(ctx);
+                                },
+                                child: Container(
+                                  padding: const EdgeInsets.all(14),
+                                  decoration: BoxDecoration(
+                                    color: isSelected
+                                        ? AppTheme.primary.withOpacity(0.07)
+                                        : Colors.white,
+                                    borderRadius: BorderRadius.circular(14),
+                                    border: Border.all(
+                                        color: isSelected
+                                            ? AppTheme.primary
+                                            : AppTheme.divider),
+                                  ),
+                                  child: Row(children: [
+                                    Container(
+                                      width: 40, height: 40,
+                                      decoration: BoxDecoration(
+                                          color: AppTheme.success.withOpacity(0.1),
+                                          borderRadius: BorderRadius.circular(10)),
+                                      child: const Icon(Icons.science_outlined,
+                                          color: AppTheme.success, size: 20),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                      Text(e['equipment_name'] as String,
+                                          style: const TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 14,
+                                              color: AppTheme.textDark)),
+                                      Text('${e['qr_code']}  •  ${e['category']}',
+                                          style: const TextStyle(
+                                              fontSize: 12, color: AppTheme.textMid)),
+                                    ])),
+                                    StatusBadge(label: 'Available', color: AppTheme.success),
+                                    if (isSelected) ...[
+                                      const SizedBox(width: 8),
+                                      const Icon(Icons.check_circle_rounded,
+                                          color: AppTheme.primary, size: 20),
+                                    ],
+                                  ]),
+                                ),
+                              );
+                            },
+                          ),
+              ),
+            ]),
+          );
+        },
+      ),
+    );
+  }
+
   Future<void> _submitRequest() async {
-    if (widget.equipmentId == 0) {
+    if (_selectedEquipmentId == 0) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No equipment selected.'), backgroundColor: AppTheme.danger));
+        const SnackBar(content: Text('Please select an equipment first.'),
+            backgroundColor: AppTheme.danger));
       return;
     }
     setState(() => _loading = true);
     try {
       final res = await ApiService.borrowEquipment({
         'student_id':     Session.studentId,
-        'equipment_id':   widget.equipmentId,
+        'equipment_id':   _selectedEquipmentId,
         'borrower_name':  _nameCtrl.text.trim(),
         'student_number': _idCtrl.text.trim(),
         'subject':        _subjectCtrl.text.trim(),
@@ -2676,33 +3232,73 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                  color: AppTheme.primary.withOpacity(0.06),
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: AppTheme.primary.withOpacity(0.1))),
-              child: Row(
-                children: [
-                  Container(
-                    width: 48,
-                    height: 48,
-                    decoration: BoxDecoration(
-                        color: AppTheme.primary.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(12)),
-                    child: const Icon(Icons.science_outlined, color: AppTheme.primary),
-                  ),
-                  const SizedBox(width: 14),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(widget.equipmentName ?? 'Select Equipment',
-                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: AppTheme.textDark)),
-                      const SizedBox(height: 2),
-                      const Text('Lab Equipment', style: TextStyle(fontSize: 12, color: AppTheme.textMid)),
-                    ],
-                  )
-                ],
+            // Equipment picker — tappable
+            GestureDetector(
+              onTap: _pickEquipment,
+              child: Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                    color: _selectedEquipmentId == 0
+                        ? AppTheme.accent.withOpacity(0.06)
+                        : AppTheme.success.withOpacity(0.06),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                        color: _selectedEquipmentId == 0
+                            ? AppTheme.accent.withOpacity(0.3)
+                            : AppTheme.success.withOpacity(0.3))),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 48, height: 48,
+                      decoration: BoxDecoration(
+                          color: (_selectedEquipmentId == 0
+                                  ? AppTheme.accent
+                                  : AppTheme.success)
+                              .withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(12)),
+                      child: Icon(
+                          _selectedEquipmentId == 0
+                              ? Icons.add_circle_outline_rounded
+                              : Icons.science_outlined,
+                          color: _selectedEquipmentId == 0
+                              ? AppTheme.accent
+                              : AppTheme.success),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            _selectedEquipmentId == 0
+                                ? 'Tap to Select Equipment'
+                                : _selectedEquipmentName,
+                            style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 15,
+                                color: _selectedEquipmentId == 0
+                                    ? AppTheme.accent
+                                    : AppTheme.textDark),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            _selectedEquipmentId == 0
+                                ? 'Required — choose from available equipment'
+                                : 'Tap to change selection',
+                            style: const TextStyle(
+                                fontSize: 12, color: AppTheme.textMid),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Icon(
+                      Icons.chevron_right_rounded,
+                      color: _selectedEquipmentId == 0
+                          ? AppTheme.accent
+                          : AppTheme.success,
+                    ),
+                  ],
+                ),
               ),
             ),
             const SizedBox(height: 20),
