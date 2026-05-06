@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -126,7 +127,39 @@ class ApiService {
       return {'success': false, 'message': e.toString()};
     }
   }
+  static Future<Map<String, dynamic>> registerStaff(
+    Map<String, dynamic> data) async {
+  try {
+    final email    = data['email'] as String;
+    final password = data['password'] as String;
+    final name     = data['name'] as String;
+    final role     = data['role'] ?? 'staff';
 
+    // Step 1: Create Firebase Auth account
+    final cred = await _auth.createUserWithEmailAndPassword(
+        email: email, password: password);
+
+    final uid = cred.user!.uid;
+
+    // Step 2: Save staff profile using UID as document ID
+    await _db.collection('staff').doc(uid).set({
+      'name':       name,
+      'email':      email,
+      'role':       role,
+      'created_at': FieldValue.serverTimestamp(),
+    });
+
+    await _auth.signOut();
+
+    return {'success': true, 'message': 'Staff account created.', 'staff_id': uid};
+  } on FirebaseAuthException catch (e) {
+    if (e.code == 'email-already-in-use')
+      return {'success': false, 'message': 'Email is already registered.'};
+    return {'success': false, 'message': e.message ?? 'Registration failed.'};
+  } catch (e) {
+    return {'success': false, 'message': e.toString()};
+  }
+}
   // ── Equipment ─────────────────────────────────────────────────────────────
   static Future<List<dynamic>> getEquipment(
       {String search = '', String category = ''}) async {
@@ -812,12 +845,47 @@ class _SplashScreenState extends State<SplashScreen>
     _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 900));
     _fade = CurvedAnimation(parent: _ctrl, curve: Curves.easeIn);
     _ctrl.forward();
-    Future.delayed(const Duration(seconds: 2), () {
-      if (mounted) {
-        Navigator.pushReplacement(
-            context, MaterialPageRoute(builder: (_) => const LoginScreen()));
-      }
-    });
+    Future.delayed(const Duration(seconds: 2), _checkSession);
+  }
+
+  Future<void> _checkSession() async {
+    if (!mounted) return;
+    final firebaseUser = FirebaseAuth.instance.currentUser;
+
+    // No active session — go to login as before
+    if (firebaseUser == null) {
+      Navigator.pushReplacement(
+          context, MaterialPageRoute(builder: (_) => const LoginScreen()));
+      return;
+    }
+
+    final uid = firebaseUser.uid;
+    final db  = FirebaseFirestore.instance;
+
+    // Try to restore as student
+    final studentDoc = await db.collection('students').doc(uid).get();
+    if (studentDoc.exists && mounted) {
+      Session.set({...studentDoc.data()!, 'student_id': uid}, 'student');
+      Navigator.pushReplacement(context,
+          MaterialPageRoute(builder: (_) => const StudentHomeScreen()));
+      return;
+    }
+
+    // Try to restore as staff
+    final staffDoc = await db.collection('staff').doc(uid).get();
+    if (staffDoc.exists && mounted) {
+      Session.set({...staffDoc.data()!, 'staff_id': uid}, 'staff');
+      Navigator.pushReplacement(context,
+          MaterialPageRoute(builder: (_) => const AdminDashboardScreen()));
+      return;
+    }
+
+    // Auth token exists but no Firestore profile — sign out cleanly
+    await FirebaseAuth.instance.signOut();
+    if (mounted) {
+      Navigator.pushReplacement(
+          context, MaterialPageRoute(builder: (_) => const LoginScreen()));
+    }
   }
 
   @override
@@ -2910,7 +2978,7 @@ class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
                       MaterialPageRoute(
                           builder: (_) => BorrowRequestScreen(
                               equipmentName: e['equipment_name'] as String,
-                              equipmentId: int.tryParse('${e['equipment_id']}') ?? 0))) : null,
+                              equipmentId: '${e['equipment_id']}'))) : null,
                   child: Container(
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
@@ -2992,8 +3060,8 @@ class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
 
 class BorrowRequestScreen extends StatefulWidget {
   final String? equipmentName;
-  final int equipmentId;
-  const BorrowRequestScreen({super.key, this.equipmentName, this.equipmentId = 0});
+  final String equipmentId; // Firebase doc ID is a String
+  const BorrowRequestScreen({super.key, this.equipmentName, this.equipmentId = ''});
   @override
   State<BorrowRequestScreen> createState() => _BorrowRequestScreenState();
 }
@@ -3006,8 +3074,8 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
   final _subjectCtrl = TextEditingController();
   final _purposeCtrl = TextEditingController();
 
-  // Selected equipment — starts from widget props or empty
-  int    _selectedEquipmentId   = 0;
+  // Selected equipment — Firebase doc ID stored as String
+  String _selectedEquipmentId   = '';
   String _selectedEquipmentName = '';
 
   // Auto due date — today at 5:00 PM
@@ -3104,11 +3172,11 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
                             itemBuilder: (_, i) {
                               final e = items[i];
                               final isSelected = _selectedEquipmentId ==
-                                  int.tryParse('${e['equipment_id']}');
+                                  '${e['equipment_id']}';
                               return GestureDetector(
                                 onTap: () {
                                   setState(() {
-                                    _selectedEquipmentId   = int.tryParse('${e['equipment_id']}') ?? 0;
+                                    _selectedEquipmentId   = '${e['equipment_id']}';
                                     _selectedEquipmentName = e['equipment_name'] as String;
                                   });
                                   Navigator.pop(ctx);
@@ -3167,7 +3235,7 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
   }
 
   Future<void> _submitRequest() async {
-    if (_selectedEquipmentId == 0) {
+    if (_selectedEquipmentId.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please select an equipment first.'),
             backgroundColor: AppTheme.danger));
@@ -3176,7 +3244,7 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
     setState(() => _loading = true);
     try {
       final res = await ApiService.borrowEquipment({
-        'student_id':     Session.studentId,
+        'student_id':     Session.currentUser?['student_id']?.toString() ?? '',
         'equipment_id':   _selectedEquipmentId,
         'borrower_name':  _nameCtrl.text.trim(),
         'student_number': _idCtrl.text.trim(),
@@ -3238,12 +3306,12 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
               child: Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                    color: _selectedEquipmentId == 0
+                    color: _selectedEquipmentId.isEmpty
                         ? AppTheme.accent.withOpacity(0.06)
                         : AppTheme.success.withOpacity(0.06),
                     borderRadius: BorderRadius.circular(16),
                     border: Border.all(
-                        color: _selectedEquipmentId == 0
+                        color: _selectedEquipmentId.isEmpty
                             ? AppTheme.accent.withOpacity(0.3)
                             : AppTheme.success.withOpacity(0.3))),
                 child: Row(
@@ -3251,16 +3319,16 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
                     Container(
                       width: 48, height: 48,
                       decoration: BoxDecoration(
-                          color: (_selectedEquipmentId == 0
+                          color: (_selectedEquipmentId.isEmpty
                                   ? AppTheme.accent
                                   : AppTheme.success)
                               .withOpacity(0.12),
                           borderRadius: BorderRadius.circular(12)),
                       child: Icon(
-                          _selectedEquipmentId == 0
+                          _selectedEquipmentId.isEmpty
                               ? Icons.add_circle_outline_rounded
                               : Icons.science_outlined,
-                          color: _selectedEquipmentId == 0
+                          color: _selectedEquipmentId.isEmpty
                               ? AppTheme.accent
                               : AppTheme.success),
                     ),
@@ -3270,19 +3338,19 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            _selectedEquipmentId == 0
+                            _selectedEquipmentId.isEmpty
                                 ? 'Tap to Select Equipment'
                                 : _selectedEquipmentName,
                             style: TextStyle(
                                 fontWeight: FontWeight.bold,
                                 fontSize: 15,
-                                color: _selectedEquipmentId == 0
+                                color: _selectedEquipmentId.isEmpty
                                     ? AppTheme.accent
                                     : AppTheme.textDark),
                           ),
                           const SizedBox(height: 2),
                           Text(
-                            _selectedEquipmentId == 0
+                            _selectedEquipmentId.isEmpty
                                 ? 'Required — choose from available equipment'
                                 : 'Tap to change selection',
                             style: const TextStyle(
@@ -3293,7 +3361,7 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
                     ),
                     Icon(
                       Icons.chevron_right_rounded,
-                      color: _selectedEquipmentId == 0
+                      color: _selectedEquipmentId.isEmpty
                           ? AppTheme.accent
                           : AppTheme.success,
                     ),
@@ -3456,7 +3524,7 @@ class _QRScanScreenState extends State<QRScanScreen> {
     final status      = equipment['status'] ?? 'Unknown';
     final isBorrowed  = status == 'Borrowed';
     final equipName   = equipment['equipment_name'] ?? '';
-    final equipId     = int.tryParse('${equipment['equipment_id']}') ?? 0;
+    final equipId     = '${equipment['equipment_id']}';
 
     showModalBottomSheet(
       context: context,
@@ -3840,7 +3908,7 @@ class _LiveBorrowList extends StatelessWidget {
           final e = items[i];
           final status = e['status'] ?? 'Pending';
           final dueDate = e['due_date'] ?? '';
-          final txId = int.tryParse('${e['transaction_id']}') ?? 0;
+          final txId = '${e['transaction_id']}';
           return Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16)),
@@ -5095,6 +5163,18 @@ class AdminDashboardScreen extends StatefulWidget {
 class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   int _currentIndex = 0;
 
+  @override
+  void initState() {
+    super.initState();
+    // ── Auth guard — redirect if not staff ──
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!Session.isDemoMode && Session.role != 'staff') {
+        Navigator.pushReplacement(context,
+            MaterialPageRoute(builder: (_) => const LoginScreen()));
+      }
+    });
+  }
+
   final List<Widget> _pages = [
     const _AdminHome(),
     const AdminRequestsScreen(),
@@ -5243,21 +5323,21 @@ class _AdminHomeState extends State<_AdminHome> {
     }
   }
 
-  Future<void> _approve(int txId) async {
+  Future<void> _approve(String txId) async {
     try {
       await ApiService.updateRequestStatus(txId, 'approve');
       _load();
     } catch (_) {}
   }
 
-  Future<void> _reject(int txId) async {
+  Future<void> _reject(String txId) async {
     try {
       await ApiService.updateRequestStatus(txId, 'reject');
       _load();
     } catch (_) {}
   }
 
-  Future<void> _return(int txId, String equipmentName) async {
+  Future<void> _return(String txId, String equipmentName) async {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -5421,7 +5501,7 @@ class _AdminHomeState extends State<_AdminHome> {
                         )
                       else
                         ..._pending.map((e) {
-                          final txId = int.tryParse('${e['transaction_id']}') ?? 0;
+                          final txId = '${e['transaction_id']}';
                           final name = e['borrower_name'] ?? e['student_number'] ?? 'Student';
                           return Padding(
                             padding: const EdgeInsets.only(bottom: 10),
@@ -5497,7 +5577,7 @@ class _AdminHomeState extends State<_AdminHome> {
                         )
                       else
                         ..._approved.map((e) {
-                          final txId = int.tryParse('${e['transaction_id']}') ?? 0;
+                          final txId = '${e['transaction_id']}';
                           final name = e['borrower_name'] ?? e['student_number'] ?? 'Student';
                           final equipName = e['equipment_name'] ?? 'Equipment';
                           final dueDate = (e['due_date'] ?? '').toString().split('T').first;
@@ -5773,7 +5853,7 @@ class _AdminRequestsScreenState extends State<AdminRequestsScreen> {
     }
   }
 
-  Future<void> _action(int txId, String action) async {
+  Future<void> _action(String txId, String action) async {
     try {
       await ApiService.updateRequestStatus(txId, action);
       _load();
@@ -5783,7 +5863,7 @@ class _AdminRequestsScreenState extends State<AdminRequestsScreen> {
   Widget _buildCard(dynamic e, {bool showActions = false}) {
     final status = e['status'] ?? '';
     final sc = _statusColor(status);
-    final txId = int.tryParse('${e['transaction_id']}') ?? 0;
+    final txId = '${e['transaction_id']}';
     final studentName = e['borrower_name'] ?? e['student_number'] ?? '';
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -6981,58 +7061,355 @@ class _Step extends StatelessWidget {
 
 // ─── Admin Reports Screen ──────────────────────────────────────────────────────
 
-class AdminReportsScreen extends StatelessWidget {
+class AdminReportsScreen extends StatefulWidget {
   const AdminReportsScreen({super.key});
+  @override
+  State<AdminReportsScreen> createState() => _AdminReportsScreenState();
+}
+
+class _AdminReportsScreenState extends State<AdminReportsScreen> {
+  bool _loading = true;
+  bool _exporting = false;
+
+  // Live stats
+  int _totalBorrowings   = 0;
+  int _totalReturned     = 0;
+  int _totalOverdue      = 0;
+  int _totalDamage       = 0;
+  int _totalEquipment    = 0;
+  int _totalStudents     = 0;
+  double _onTimeRate     = 0;
+
+  // Most borrowed equipment map: name → count
+  Map<String, int> _mostBorrowed = {};
+
+  // Recent transactions for export
+  List<dynamic> _allTransactions = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    try {
+      if (Session.isDemoMode) {
+        await Future.delayed(const Duration(milliseconds: 400));
+        setState(() {
+          _totalBorrowings = 47;
+          _totalReturned   = 43;
+          _totalOverdue    = 3;
+          _totalDamage     = 2;
+          _totalEquipment  = 9;
+          _totalStudents   = 12;
+          _onTimeRate      = 91.5;
+          _mostBorrowed    = {
+            'Digital Multimeter': 18,
+            'Breadboard Kit':     14,
+            'Oscilloscope':       11,
+            'Soldering Iron Kit':  8,
+          };
+          _loading = false;
+        });
+        return;
+      }
+
+      // Load from Firebase
+      final stats = await ApiService.getDashboardStats();
+      final txSnap = await ApiService.getRequests();
+      final eqList = await ApiService.getEquipment();
+
+      // Count borrowing stats
+      final now = DateTime.now();
+      int returned = 0, overdue = 0;
+
+      // Count most borrowed equipment
+      final Map<String, int> borrowCount = {};
+      for (final tx in txSnap) {
+        final eqName = tx['equipment_name'] as String? ?? 'Unknown';
+        borrowCount[eqName] = (borrowCount[eqName] ?? 0) + 1;
+
+        if (tx['status'] == 'Returned') {
+          returned++;
+        }
+        if (tx['status'] == 'Approved') {
+          final due = DateTime.tryParse(
+              '${tx['due_date']}'.replaceAll(' ', 'T'));
+          if (due != null && due.isBefore(now)) overdue++;
+        }
+      }
+
+      // Sort most borrowed descending
+      final sorted = borrowCount.entries.toList()
+        ..sort((a, b) => b.value.compareTo(a.value));
+      final top4 = Map.fromEntries(sorted.take(4));
+
+      final total = txSnap.length;
+      final onTime = total > 0 ? (returned / total * 100) : 0.0;
+
+      setState(() {
+        _totalBorrowings  = total;
+        _totalReturned    = returned;
+        _totalOverdue     = overdue;
+        _totalDamage      = stats['damage_reports'] ?? 0;
+        _totalEquipment   = eqList.length;
+        _onTimeRate       = onTime;
+        _mostBorrowed     = top4;
+        _allTransactions  = txSnap;
+        _loading          = false;
+      });
+    } catch (e) {
+      setState(() => _loading = false);
+    }
+  }
+
+  // ── Generate and share a text report ──────────────────────────────────────
+  Future<void> _exportReport() async {
+    setState(() => _exporting = true);
+
+    try {
+      final now = DateTime.now();
+      final dateStr =
+          '${now.year}-${now.month.toString().padLeft(2,'0')}-${now.day.toString().padLeft(2,'0')}';
+      final timeStr =
+          '${now.hour.toString().padLeft(2,'0')}:${now.minute.toString().padLeft(2,'0')}';
+
+      // Build report text
+      final buf = StringBuffer();
+      buf.writeln('==============================================');
+      buf.writeln('  LABTRACK — CEA LABORATORY REPORT');
+      buf.writeln('  New Era University');
+      buf.writeln('  Generated: $dateStr at $timeStr');
+      buf.writeln('==============================================');
+      buf.writeln('');
+      buf.writeln('SUMMARY');
+      buf.writeln('----------------------------------------------');
+      buf.writeln('Total Borrowings   : $_totalBorrowings');
+      buf.writeln('Total Returned     : $_totalReturned');
+      buf.writeln('Total Overdue      : $_totalOverdue');
+      buf.writeln('Damage Reports     : $_totalDamage');
+      buf.writeln('Total Equipment    : $_totalEquipment');
+      buf.writeln('On-Time Return Rate: ${_onTimeRate.toStringAsFixed(1)}%');
+      buf.writeln('');
+      buf.writeln('MOST BORROWED EQUIPMENT');
+      buf.writeln('----------------------------------------------');
+      int rank = 1;
+      _mostBorrowed.forEach((name, count) {
+        buf.writeln('$rank. $name — ${count}x borrowed');
+        rank++;
+      });
+
+      if (_allTransactions.isNotEmpty) {
+        buf.writeln('');
+        buf.writeln('TRANSACTION LOG');
+        buf.writeln('----------------------------------------------');
+        for (final tx in _allTransactions) {
+          final status  = tx['status'] ?? '';
+          final student = tx['borrower_name'] ?? tx['student_number'] ?? '—';
+          final equip   = tx['equipment_name'] ?? '—';
+          final bDate   = '${tx['borrow_date'] ?? ''}'.split('T').first;
+          buf.writeln('[$status] $student | $equip | $bDate');
+        }
+      }
+
+      buf.writeln('');
+      buf.writeln('==============================================');
+      buf.writeln('  END OF REPORT — LabTrack v1.0');
+      buf.writeln('==============================================');
+
+      final reportText = buf.toString();
+
+      // Show report in a dialog with copy option
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        builder: (_) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Row(children: const [
+            Icon(Icons.assessment_rounded, color: AppTheme.primary),
+            SizedBox(width: 10),
+            Text('Full Report'),
+          ]),
+          content: SizedBox(
+            width: double.maxFinite,
+            height: 400,
+            child: Column(
+              children: [
+                Expanded(
+                  child: Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1E1E1E),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: SingleChildScrollView(
+                      child: Text(
+                        reportText,
+                        style: const TextStyle(
+                          fontFamily: 'Courier New',
+                          fontSize: 11,
+                          color: Color(0xFF00FF88),
+                          height: 1.5,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  'Tap "Copy" to copy the report to your clipboard.',
+                  style: TextStyle(fontSize: 12, color: AppTheme.textMid),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Close', style: TextStyle(color: AppTheme.textMid)),
+            ),
+            ElevatedButton.icon(
+              onPressed: () {
+                // Copy to clipboard
+                // ignore: deprecated_member_use
+                Clipboard.setData(ClipboardData(text: reportText));
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('✅ Report copied to clipboard! Paste it in Notes or Email.'),
+                    backgroundColor: AppTheme.success,
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+              },
+              icon: const Icon(Icons.copy_rounded),
+              label: const Text('Copy Report'),
+            ),
+          ],
+        ),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Export failed: $e'), backgroundColor: AppTheme.danger));
+    } finally {
+      if (mounted) setState(() => _exporting = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Reports')),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Summary Cards
-            Row(
-              children: [
-                _ReportCard(label: 'This Month\nBorrowings', value: '47', icon: Icons.trending_up_rounded, color: AppTheme.accent),
-                const SizedBox(width: 12),
-                _ReportCard(label: 'On-Time\nReturns', value: '91%', icon: Icons.check_circle_outline_rounded, color: AppTheme.success),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                _ReportCard(label: 'Total\nOverdue', value: '3', icon: Icons.warning_amber_rounded, color: AppTheme.danger),
-                const SizedBox(width: 12),
-                _ReportCard(label: 'Damage\nReports', value: '2', icon: Icons.report_problem_outlined, color: AppTheme.warning),
-              ],
-            ),
-            const SizedBox(height: 24),
+    if (_loading) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
 
-            // Most Borrowed
-            const SectionHeader(title: 'Most Borrowed Equipment'),
-            const SizedBox(height: 12),
-            ...[
-              ('Digital Multimeter', 0.9, '18x'),
-              ('Breadboard Kit', 0.72, '14x'),
-              ('Oscilloscope', 0.55, '11x'),
-              ('Soldering Iron Kit', 0.4, '8x'),
-            ].map((e) => Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: Container(
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(14)),
-                    child: Row(
-                      children: [
+    // Build most borrowed bars
+    final maxCount = _mostBorrowed.values.isEmpty
+        ? 1
+        : _mostBorrowed.values.reduce((a, b) => a > b ? a : b);
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Reports'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh_rounded),
+            onPressed: _load,
+            tooltip: 'Refresh',
+          ),
+        ],
+      ),
+      body: RefreshIndicator(
+        onRefresh: _load,
+        child: SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+
+              // ── Summary Cards ──
+              Row(children: [
+                _ReportCard(
+                  label: 'Total\nBorrowings',
+                  value: '$_totalBorrowings',
+                  icon: Icons.trending_up_rounded,
+                  color: AppTheme.accent,
+                ),
+                const SizedBox(width: 12),
+                _ReportCard(
+                  label: 'On-Time\nReturns',
+                  value: '${_onTimeRate.toStringAsFixed(0)}%',
+                  icon: Icons.check_circle_outline_rounded,
+                  color: AppTheme.success,
+                ),
+              ]),
+              const SizedBox(height: 12),
+              Row(children: [
+                _ReportCard(
+                  label: 'Overdue\nItems',
+                  value: '$_totalOverdue',
+                  icon: Icons.warning_amber_rounded,
+                  color: AppTheme.danger,
+                ),
+                const SizedBox(width: 12),
+                _ReportCard(
+                  label: 'Damage\nReports',
+                  value: '$_totalDamage',
+                  icon: Icons.report_problem_outlined,
+                  color: AppTheme.warning,
+                ),
+              ]),
+              const SizedBox(height: 12),
+              Row(children: [
+                _ReportCard(
+                  label: 'Total\nEquipment',
+                  value: '$_totalEquipment',
+                  icon: Icons.science_rounded,
+                  color: AppTheme.primary,
+                ),
+                const SizedBox(width: 12),
+                _ReportCard(
+                  label: 'Returned\nSuccessfully',
+                  value: '$_totalReturned',
+                  icon: Icons.assignment_return_rounded,
+                  color: AppTheme.success,
+                ),
+              ]),
+              const SizedBox(height: 24),
+
+              // ── Most Borrowed ──
+              const SectionHeader(title: 'Most Borrowed Equipment'),
+              const SizedBox(height: 12),
+              if (_mostBorrowed.isEmpty)
+                Container(
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(14)),
+                  child: const Center(
+                    child: Text('No borrowing data yet.',
+                        style: TextStyle(color: AppTheme.textMid)),
+                  ),
+                )
+              else
+                ..._mostBorrowed.entries.map((e) {
+                  final ratio = maxCount > 0 ? e.value / maxCount : 0.0;
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: Container(
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(14)),
+                      child: Row(children: [
                         Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(e.$1,
+                              Text(e.key,
                                   style: const TextStyle(
                                       fontWeight: FontWeight.bold,
                                       fontSize: 13,
@@ -7041,38 +7418,122 @@ class AdminReportsScreen extends StatelessWidget {
                               ClipRRect(
                                 borderRadius: BorderRadius.circular(4),
                                 child: LinearProgressIndicator(
-                                  value: e.$2,
+                                  value: ratio,
                                   minHeight: 6,
                                   backgroundColor: AppTheme.divider,
-                                  valueColor: const AlwaysStoppedAnimation(AppTheme.accent),
+                                  valueColor: const AlwaysStoppedAnimation(
+                                      AppTheme.accent),
                                 ),
                               ),
                             ],
                           ),
                         ),
                         const SizedBox(width: 16),
-                        Text(e.$3,
+                        Text('${e.value}x',
                             style: const TextStyle(
                                 fontWeight: FontWeight.bold,
                                 color: AppTheme.accent)),
-                      ],
+                      ]),
                     ),
+                  );
+                }),
+              const SizedBox(height: 24),
+
+              // ── Recent Transactions ──
+              const SectionHeader(title: 'Recent Transactions'),
+              const SizedBox(height: 12),
+              if (_allTransactions.isEmpty)
+                Container(
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(14)),
+                  child: const Center(
+                    child: Text('No transactions yet.',
+                        style: TextStyle(color: AppTheme.textMid)),
                   ),
-                )),
-            const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: () {},
-                icon: const Icon(Icons.download_rounded),
-                label: const Text('Export Full Report'),
-                style: OutlinedButton.styleFrom(
-                    foregroundColor: AppTheme.primary,
-                    side: const BorderSide(color: AppTheme.primary),
-                    padding: const EdgeInsets.symmetric(vertical: 14)),
+                )
+              else
+                Container(
+                  decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(14)),
+                  child: Column(
+                    children: _allTransactions.take(8).map((tx) {
+                      final status   = tx['status'] ?? '';
+                      final student  = tx['borrower_name'] ??
+                          tx['student_number'] ?? '—';
+                      final equip    = tx['equipment_name'] ?? '—';
+                      final bDate    =
+                          '${tx['borrow_date'] ?? ''}'.split('T').first.split(' ').first;
+                      final sc = status == 'Approved' ? AppTheme.success
+                               : status == 'Pending'  ? AppTheme.accent
+                               : status == 'Returned' ? AppTheme.textMid
+                               : AppTheme.danger;
+                      return Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 10),
+                        decoration: BoxDecoration(
+                          border: Border(
+                            bottom: BorderSide(color: AppTheme.divider),
+                          ),
+                        ),
+                        child: Row(children: [
+                          Container(
+                            width: 8, height: 8,
+                            decoration: BoxDecoration(
+                                color: sc, shape: BoxShape.circle),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                            Text(student, style: const TextStyle(
+                                fontSize: 12, fontWeight: FontWeight.bold,
+                                color: AppTheme.textDark)),
+                            Text(equip, style: const TextStyle(
+                                fontSize: 11, color: AppTheme.textMid)),
+                          ])),
+                          Column(crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                            StatusBadge(label: status, color: sc),
+                            const SizedBox(height: 2),
+                            Text(bDate, style: const TextStyle(
+                                fontSize: 10, color: AppTheme.textLight)),
+                          ]),
+                        ]),
+                      );
+                    }).toList(),
+                  ),
+                ),
+              const SizedBox(height: 24),
+
+              // ── Export Button ──
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: _exporting ? null : _exportReport,
+                  icon: _exporting
+                      ? const SizedBox(
+                          width: 16, height: 16,
+                          child: CircularProgressIndicator(
+                              color: Colors.white, strokeWidth: 2))
+                      : const Icon(Icons.download_rounded),
+                  label: Text(_exporting ? 'Generating...' : 'Export Full Report'),
+                  style: ElevatedButton.styleFrom(
+                      backgroundColor: AppTheme.primary,
+                      padding: const EdgeInsets.symmetric(vertical: 14)),
+                ),
               ),
-            ),
-          ],
+              const SizedBox(height: 8),
+              const Text(
+                'Report will be copied to your clipboard — paste it in Notes, Email, or Google Docs.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 11, color: AppTheme.textMid),
+              ),
+              const SizedBox(height: 20),
+            ],
+          ),
         ),
       ),
     );
