@@ -900,29 +900,72 @@ class _SplashScreenState extends State<SplashScreen>
       backgroundColor: AppTheme.primary,
       body: FadeTransition(
         opacity: _fade,
-        child: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const NeuLogo(size: 90),
-              const SizedBox(height: 24),
-              const Text('LabTrack',
-                  style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 34,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 2)),
-              const SizedBox(height: 8),
-              const Text('CEA Laboratory · New Era University',
-                  style: TextStyle(
-                      color: AppTheme.textLight, fontSize: 14, letterSpacing: 1)),
-              const SizedBox(height: 60),
-              const SizedBox(
-                  width: 24,
-                  height: 24,
-                  child: CircularProgressIndicator(
-                      color: AppTheme.accent, strokeWidth: 2)),
-            ],
+        child: Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [AppTheme.primaryDark, AppTheme.primary],
+            ),
+          ),
+          child: Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                // Logo
+                Container(
+                  width: 100, height: 100,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(28),
+                    border: Border.all(
+                        color: Colors.white.withOpacity(0.2), width: 1.5),
+                  ),
+                  child: const Icon(Icons.science_rounded,
+                      color: AppTheme.accent, size: 52),
+                ),
+                const SizedBox(height: 24),
+                // App name
+                const Text('LabTrack',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 36,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 2)),
+                const SizedBox(height: 10),
+                // Full system title
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 40),
+                  child: Text(
+                    'Mobile Equipment Borrowing\n& Return Monitoring System',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                        color: AppTheme.accent,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        height: 1.4),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                const Text('for School Laboratories',
+                    style: TextStyle(
+                        color: AppTheme.textLight,
+                        fontSize: 12,
+                        letterSpacing: 0.5)),
+                const SizedBox(height: 8),
+                const Text('CEA · New Era University',
+                    style: TextStyle(
+                        color: AppTheme.textLight,
+                        fontSize: 11,
+                        letterSpacing: 0.5)),
+                const SizedBox(height: 56),
+                const SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: CircularProgressIndicator(
+                        color: AppTheme.accent, strokeWidth: 2)),
+              ],
+            ),
           ),
         ),
       ),
@@ -1024,8 +1067,8 @@ class _LoginScreenState extends State<LoginScreen> {
       body: SafeArea(
         child: Column(
           children: [
-            const SizedBox(height: 48),
-            const NeuLogo(size: 64),
+            const SizedBox(height: 40),
+            const NeuLogo(size: 60),
             const SizedBox(height: 12),
             const Text('LabTrack',
                 style: TextStyle(
@@ -1033,10 +1076,25 @@ class _LoginScreenState extends State<LoginScreen> {
                     fontSize: 28,
                     fontWeight: FontWeight.bold,
                     letterSpacing: 1.5)),
+            const SizedBox(height: 6),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 32),
+              child: Text(
+                'Mobile Equipment Borrowing\n& Return Monitoring System',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                    color: AppTheme.accent,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    height: 1.4),
+              ),
+            ),
             const SizedBox(height: 4),
-            const Text('New Era University · Lab System',
-                style: TextStyle(color: AppTheme.textLight, fontSize: 13)),
-            const SizedBox(height: 36),
+            const Text('for School Laboratories · CEA · NEU',
+                style: TextStyle(
+                    color: AppTheme.textLight,
+                    fontSize: 11)),
+            const SizedBox(height: 28),
             Expanded(
               child: Container(
                 width: double.infinity,
@@ -2109,7 +2167,7 @@ class _StudentDashboardState extends State<_StudentDashboard> {
         child: CustomScrollView(
           slivers: [
             SliverAppBar(
-              expandedHeight: 100,
+              expandedHeight: 200,
               pinned: true,
               backgroundColor: AppTheme.primary,
               flexibleSpace: FlexibleSpaceBar(
@@ -2121,51 +2179,94 @@ class _StudentDashboardState extends State<_StudentDashboard> {
                       colors: [AppTheme.primary, AppTheme.primaryDark],
                     ),
                   ),
-                  padding: const EdgeInsets.fromLTRB(20, 44, 16, 12),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
+                  child: Stack(
                     children: [
-                      CircleAvatar(
-                        radius: 18,
-                        backgroundColor: AppTheme.accent.withOpacity(0.2),
-                        child: Text(Session.initials,
-                            style: const TextStyle(
-                                color: AppTheme.accent,
-                                fontSize: 13,
-                                fontWeight: FontWeight.bold)),
+                      // Background watermark icon
+                      Positioned(
+                        right: -20, bottom: -20,
+                        child: Icon(Icons.science_rounded,
+                            size: 160,
+                            color: Colors.white.withOpacity(0.04)),
                       ),
-                      const SizedBox(width: 10),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const Text('Good day,',
-                              style: TextStyle(color: AppTheme.textLight, fontSize: 11)),
-                          Text(Session.name,
-                              style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.bold)),
-                        ],
-                      ),
-                      const Spacer(),
-                      Stack(
-                        children: [
-                          IconButton(
-                              icon: const Icon(Icons.notifications_outlined,
-                                  color: Colors.white, size: 22),
-                              onPressed: () {}),
-                          if (_notifications.isNotEmpty)
-                            Positioned(
-                              right: 8, top: 8,
-                              child: Container(
-                                width: 7, height: 7,
-                                decoration: const BoxDecoration(
-                                    color: AppTheme.danger,
-                                    shape: BoxShape.circle),
-                              ),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 48, 20, 16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // System name + notification bell row
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                Container(
+                                  width: 36, height: 36,
+                                  decoration: BoxDecoration(
+                                    color: AppTheme.accent.withOpacity(0.2),
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: const Icon(Icons.science_rounded,
+                                      color: AppTheme.accent, size: 20),
+                                ),
+                                const SizedBox(width: 10),
+                                const Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text('LabTrack',
+                                          style: TextStyle(
+                                              color: AppTheme.accent,
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w800,
+                                              letterSpacing: 1)),
+                                      Text('CEA Laboratory · New Era University',
+                                          style: TextStyle(
+                                              color: AppTheme.textLight,
+                                              fontSize: 10)),
+                                    ],
+                                  ),
+                                ),
+                                Stack(
+                                  children: [
+                                    IconButton(
+                                        icon: const Icon(
+                                            Icons.notifications_outlined,
+                                            color: Colors.white, size: 22),
+                                        onPressed: () {}),
+                                    if (_notifications.isNotEmpty)
+                                      Positioned(
+                                        right: 8, top: 8,
+                                        child: Container(
+                                          width: 7, height: 7,
+                                          decoration: const BoxDecoration(
+                                              color: AppTheme.danger,
+                                              shape: BoxShape.circle),
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ],
                             ),
-                        ],
+                            const SizedBox(height: 14),
+                            // System title
+                            const Text(
+                              'Equipment Borrowing\n& Return Monitoring',
+                              style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.bold,
+                                  height: 1.2),
+                            ),
+                            const SizedBox(height: 6),
+                            Row(children: [
+                              const Icon(Icons.person_outline_rounded,
+                                  color: AppTheme.textLight, size: 13),
+                              const SizedBox(width: 4),
+                              Text('Welcome, ${Session.name}',
+                                  style: const TextStyle(
+                                      color: AppTheme.textLight,
+                                      fontSize: 12)),
+                            ]),
+                          ],
+                        ),
                       ),
                     ],
                   ),
@@ -2203,6 +2304,61 @@ class _StudentDashboardState extends State<_StudentDashboard> {
                             icon: Icons.warning_amber_rounded,
                             color: _overdue > 0 ? AppTheme.danger : AppTheme.success),
                       ]),
+                      const SizedBox(height: 16),
+
+                      // ── System Identity Banner ──
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: [
+                              AppTheme.primary.withOpacity(0.08),
+                              AppTheme.accent.withOpacity(0.06),
+                            ],
+                          ),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(
+                              color: AppTheme.primary.withOpacity(0.15)),
+                        ),
+                        child: Row(children: [
+                          Container(
+                            width: 44, height: 44,
+                            decoration: BoxDecoration(
+                              color: AppTheme.primary.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: const Icon(Icons.science_rounded,
+                                color: AppTheme.primary, size: 24),
+                          ),
+                          const SizedBox(width: 14),
+                          const Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Mobile Equipment Borrowing\n& Return Monitoring System',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.bold,
+                                    color: AppTheme.primary,
+                                    height: 1.3,
+                                  ),
+                                ),
+                                SizedBox(height: 3),
+                                Text(
+                                  'School Laboratories · CEA · New Era University',
+                                  style: TextStyle(
+                                      fontSize: 11,
+                                      color: AppTheme.textMid),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ]),
+                      ),
                       const SizedBox(height: 24),
 
                       // ── Live Notifications ──
@@ -5375,7 +5531,7 @@ class _AdminHomeState extends State<_AdminHome> {
         child: CustomScrollView(
           slivers: [
             SliverAppBar(
-              expandedHeight: 160,
+              expandedHeight: 210,
               pinned: true,
               backgroundColor: AppTheme.primary,
               automaticallyImplyLeading: false,
@@ -5388,29 +5544,88 @@ class _AdminHomeState extends State<_AdminHome> {
                       colors: [AppTheme.primary, AppTheme.primaryDark],
                     ),
                   ),
-                  padding: const EdgeInsets.fromLTRB(24, 60, 24, 20),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.end,
+                  child: Stack(
                     children: [
-                      Row(children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                          decoration: BoxDecoration(
-                              color: AppTheme.accent.withOpacity(0.2),
-                              borderRadius: BorderRadius.circular(8)),
-                          child: const Text('ADMIN',
-                              style: TextStyle(color: AppTheme.accent, fontSize: 11,
-                                  fontWeight: FontWeight.bold, letterSpacing: 1)),
+                      // Background watermark
+                      Positioned(
+                        right: -24, top: -10,
+                        child: Icon(Icons.inventory_2_rounded,
+                            size: 180,
+                            color: Colors.white.withOpacity(0.04)),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(24, 52, 24, 20),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // Top row
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                Container(
+                                  width: 36, height: 36,
+                                  decoration: BoxDecoration(
+                                      color: AppTheme.accent.withOpacity(0.2),
+                                      borderRadius: BorderRadius.circular(10)),
+                                  child: const Icon(Icons.science_rounded,
+                                      color: AppTheme.accent, size: 20),
+                                ),
+                                const SizedBox(width: 10),
+                                const Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text('LabTrack',
+                                          style: TextStyle(
+                                              color: AppTheme.accent,
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w800,
+                                              letterSpacing: 1)),
+                                      Text('CEA Laboratory · New Era University',
+                                          style: TextStyle(
+                                              color: AppTheme.textLight,
+                                              fontSize: 10)),
+                                    ],
+                                  ),
+                                ),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 10, vertical: 4),
+                                  decoration: BoxDecoration(
+                                      color: AppTheme.accent.withOpacity(0.2),
+                                      borderRadius: BorderRadius.circular(8)),
+                                  child: const Text('ADMIN',
+                                      style: TextStyle(
+                                          color: AppTheme.accent,
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.bold,
+                                          letterSpacing: 1)),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 14),
+                            // System title
+                            const Text(
+                              'Equipment Borrowing\n& Return Monitoring',
+                              style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.bold,
+                                  height: 1.2),
+                            ),
+                            const SizedBox(height: 6),
+                            Row(children: [
+                              const Icon(Icons.manage_accounts_rounded,
+                                  color: AppTheme.textLight, size: 13),
+                              const SizedBox(width: 4),
+                              Text('Staff: ${Session.name}',
+                                  style: const TextStyle(
+                                      color: AppTheme.textLight,
+                                      fontSize: 12)),
+                            ]),
+                          ],
                         ),
-                        const SizedBox(width: 10),
-                        Text(Session.name,
-                            style: const TextStyle(color: Colors.white, fontSize: 20,
-                                fontWeight: FontWeight.bold)),
-                      ]),
-                      const SizedBox(height: 4),
-                      const Text('CEA Laboratory · New Era University',
-                          style: TextStyle(color: AppTheme.textLight, fontSize: 12)),
+                      ),
                     ],
                   ),
                 ),
@@ -5427,6 +5642,60 @@ class _AdminHomeState extends State<_AdminHome> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+
+                      // ── System Identity Banner ──
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(14),
+                        margin: const EdgeInsets.only(bottom: 20),
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: [
+                              AppTheme.primary.withOpacity(0.07),
+                              AppTheme.accent.withOpacity(0.05),
+                            ],
+                          ),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(
+                              color: AppTheme.primary.withOpacity(0.15)),
+                        ),
+                        child: Row(children: [
+                          Container(
+                            width: 40, height: 40,
+                            decoration: BoxDecoration(
+                                color: AppTheme.primary.withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(10)),
+                            child: const Icon(Icons.science_rounded,
+                                color: AppTheme.primary, size: 22),
+                          ),
+                          const SizedBox(width: 12),
+                          const Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Mobile Equipment Borrowing\n& Return Monitoring System',
+                                  style: TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.bold,
+                                      color: AppTheme.primary,
+                                      height: 1.3),
+                                ),
+                                SizedBox(height: 2),
+                                Text(
+                                  'School Laboratories · CEA · New Era University',
+                                  style: TextStyle(
+                                      fontSize: 11,
+                                      color: AppTheme.textMid),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ]),
+                      ),
+
                       // ── Live Stats ──
                       IntrinsicHeight(
                         child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
