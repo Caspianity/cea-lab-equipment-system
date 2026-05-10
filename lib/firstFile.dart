@@ -334,12 +334,16 @@ class ApiService {
       return Session.demoBorrowings;
     }
     final sid = Session.currentUser?['student_id']?.toString() ?? '';
+    if (sid.isEmpty) return [];
+
+    // Query without orderBy to avoid composite index requirement
+    // Firestore only needs a single-field index for .where()
     final snap = await _db
         .collection('borrow_transactions')
         .where('student_id', isEqualTo: sid)
-        .orderBy('borrow_date', descending: true)
         .get();
-    return snap.docs.map((d) {
+
+    final results = snap.docs.map((d) {
       final data = d.data();
       return {
         ...data,
@@ -354,6 +358,15 @@ class ApiService {
             '',
       };
     }).toList();
+
+    // Sort by borrow_date descending in Dart — no index needed
+    results.sort((a, b) {
+      final aDate = DateTime.tryParse('${a['borrow_date']}') ?? DateTime(2000);
+      final bDate = DateTime.tryParse('${b['borrow_date']}') ?? DateTime(2000);
+      return bDate.compareTo(aDate);
+    });
+
+    return results;
   }
 
   static Future<List<dynamic>> getRequests({String status = ''}) async {
@@ -364,12 +377,13 @@ class ApiService {
           .where((e) => e['status'] == status)
           .toList();
     }
-    Query q = _db
-        .collection('borrow_transactions')
-        .orderBy('borrow_date', descending: true);
-    if (status.isNotEmpty) q = q.where('status', isEqualTo: status);
+    // Query without orderBy to avoid composite index requirement
+    Query q = _db.collection('borrow_transactions');
+    if (status.isNotEmpty && status != 'All') {
+      q = q.where('status', isEqualTo: status);
+    }
     final snap = await q.get();
-    return snap.docs.map((d) {
+    final results = snap.docs.map((d) {
       final data = d.data() as Map<String, dynamic>;
       return {
         ...data,
@@ -384,6 +398,14 @@ class ApiService {
             '',
       };
     }).toList();
+
+    // Sort descending by borrow_date in Dart
+    results.sort((a, b) {
+      final aDate = DateTime.tryParse('${a['borrow_date']}') ?? DateTime(2000);
+      final bDate = DateTime.tryParse('${b['borrow_date']}') ?? DateTime(2000);
+      return bDate.compareTo(aDate);
+    });
+    return results;
   }
 
   static Future<Map<String, dynamic>> updateRequestStatus(
@@ -540,17 +562,17 @@ class Session {
   ];
 
   static final List<Map<String, dynamic>> demoBorrowings = [
-    {'transaction_id': '1', 'equipment_name': 'Digital Multimeter', 'qr_code': 'ELE-001', 'status': 'Approved',  'due_date': '2026-04-01', 'student_number': '2024-00001', 'borrower_name': 'Demo Student', 'quantity': 1},
-    {'transaction_id': '2', 'equipment_name': 'Breadboard Kit',     'qr_code': 'ELE-003', 'status': 'Pending',   'due_date': '2026-04-05', 'student_number': '2024-00001', 'borrower_name': 'Demo Student', 'quantity': 2},
-    {'transaction_id': '3', 'equipment_name': 'Vernier Caliper',    'qr_code': 'MEA-001', 'status': 'Returned',  'due_date': '2026-03-20', 'student_number': '2024-00001', 'borrower_name': 'Demo Student', 'quantity': 1},
+    {'transaction_id': '1', 'equipment_name': 'Digital Multimeter', 'qr_code': 'ELE-001', 'status': 'Approved',  'due_date': '2026-04-01', 'student_number': '26-10001-001', 'borrower_name': 'Demo Student', 'quantity': 1},
+    {'transaction_id': '2', 'equipment_name': 'Breadboard Kit',     'qr_code': 'ELE-003', 'status': 'Pending',   'due_date': '2026-04-05', 'student_number': '26-10001-001', 'borrower_name': 'Demo Student', 'quantity': 2},
+    {'transaction_id': '3', 'equipment_name': 'Vernier Caliper',    'qr_code': 'MEA-001', 'status': 'Returned',  'due_date': '2026-03-20', 'student_number': '26-10001-001', 'borrower_name': 'Demo Student', 'quantity': 1},
   ];
 
   static final List<Map<String, dynamic>> demoRequests = [
-    {'transaction_id': '1', 'equipment_name': 'Digital Multimeter', 'qr_code': 'ELE-001', 'status': 'Pending',  'due_date': '2026-04-01T00:00:00', 'student_number': '2024-00123', 'borrower_name': 'Juan Santos',  'quantity': 1},
-    {'transaction_id': '2', 'equipment_name': 'Oscilloscope',        'qr_code': 'ELE-002', 'status': 'Pending',  'due_date': '2026-04-03T00:00:00', 'student_number': '2024-00145', 'borrower_name': 'Ana Reyes',    'quantity': 1},
-    {'transaction_id': '3', 'equipment_name': 'Breadboard Kit',      'qr_code': 'ELE-003', 'status': 'Approved', 'due_date': '2026-04-05T00:00:00', 'student_number': '2024-00167', 'borrower_name': 'Leo Cruz',     'quantity': 2},
-    {'transaction_id': '4', 'equipment_name': 'Soldering Iron Kit',  'qr_code': 'TOO-001', 'status': 'Approved', 'due_date': '2026-03-28T00:00:00', 'student_number': '2024-00111', 'borrower_name': 'Maria Lim',    'quantity': 1},
-    {'transaction_id': '5', 'equipment_name': 'Vernier Caliper',     'qr_code': 'MEA-001', 'status': 'Returned', 'due_date': '2026-03-20T00:00:00', 'student_number': '2024-00099', 'borrower_name': 'Carlo Bato',   'quantity': 3},
+    {'transaction_id': '1', 'equipment_name': 'Digital Multimeter', 'qr_code': 'ELE-001', 'status': 'Pending',  'due_date': '2026-04-01T00:00:00', 'student_number': '26-12345-123', 'borrower_name': 'Juan Santos',  'quantity': 1},
+    {'transaction_id': '2', 'equipment_name': 'Oscilloscope',        'qr_code': 'ELE-002', 'status': 'Pending',  'due_date': '2026-04-03T00:00:00', 'student_number': '26-12345-145', 'borrower_name': 'Ana Reyes',    'quantity': 1},
+    {'transaction_id': '3', 'equipment_name': 'Breadboard Kit',      'qr_code': 'ELE-003', 'status': 'Approved', 'due_date': '2026-04-05T00:00:00', 'student_number': '26-12345-167', 'borrower_name': 'Leo Cruz',     'quantity': 2},
+    {'transaction_id': '4', 'equipment_name': 'Soldering Iron Kit',  'qr_code': 'TOO-001', 'status': 'Approved', 'due_date': '2026-03-28T00:00:00', 'student_number': '26-12345-111', 'borrower_name': 'Maria Lim',    'quantity': 1},
+    {'transaction_id': '5', 'equipment_name': 'Vernier Caliper',     'qr_code': 'MEA-001', 'status': 'Returned', 'due_date': '2026-03-20T00:00:00', 'student_number': '26-12345-099', 'borrower_name': 'Carlo Bato',   'quantity': 3},
   ];
 }
 
@@ -669,7 +691,7 @@ class NeuLogo extends StatelessWidget {
         border: Border.all(color: AppTheme.accent, width: size * 0.04),
         boxShadow: [
           BoxShadow(
-              color: AppTheme.accent.withOpacity(0.25),
+              color: const Color(0x40F5A623),
               blurRadius: 8,
               offset: const Offset(0, 2)),
         ],
@@ -916,10 +938,10 @@ class _SplashScreenState extends State<SplashScreen>
                 Container(
                   width: 100, height: 100,
                   decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.1),
+                    color: const Color(0x1AFFFFFF),
                     borderRadius: BorderRadius.circular(28),
                     border: Border.all(
-                        color: Colors.white.withOpacity(0.2), width: 1.5),
+                        color: const Color(0x33FFFFFF), width: 1.5),
                   ),
                   child: const Icon(Icons.science_rounded,
                       color: AppTheme.accent, size: 52),
@@ -1159,7 +1181,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         autocorrect: false,
                         decoration: InputDecoration(
                           hintText: _isStudent
-                              ? 'e.g. 2024-00123'
+                              ? 'e.g. 26-12345-123'
                               : 'staff@neu.edu.ph',
                           prefixIcon: Icon(
                               _isStudent
@@ -1267,7 +1289,7 @@ class _LoginScreenState extends State<LoginScreen> {
                               Session.set({
                                 'student_id':     '1',
                                 'name':           'Demo Student',
-                                'student_number': '2024-00001',
+                                'student_number': '26-10001-001',
                                 'course':         'BSECE',
                                 'year_level':     3,
                               }, 'student', demo: true);
@@ -1347,9 +1369,9 @@ class _DemoButton extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 12),
         decoration: BoxDecoration(
-          color: color.withOpacity(0.08),
+          color: color.withAlpha(20),
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: color.withOpacity(0.3)),
+          border: Border.all(color: color.withAlpha(77)),
         ),
         child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
           Icon(icon, color: color, size: 22),
@@ -1390,26 +1412,28 @@ class _SignUpScreenState extends State<SignUpScreen> {
 
   // Live email validation state
   bool get _emailValid =>
-      RegExp(r'^[a-zA-Z]+\.[a-zA-Z]+@neu\.edu\.ph$')
+      RegExp(r'^[a-zA-Z0-9._%+\-]+@neu\.edu\.ph$')
           .hasMatch(_emailCtrl.text.trim());
 
-  // Live student ID validation
+  // Live student ID validation (##-#####-### format)
   bool get _idValid =>
       RegExp(r'^\d{2}-\d{5}-\d{3}$').hasMatch(_studentIdCtrl.text.trim());
 
+  // Validate: must be NEU email domain only
   String? _validateEmail(String? val) {
-    if (val == null || val.trim().isEmpty) return 'Required';
-    if (!RegExp(r'^[a-zA-Z]+\.[a-zA-Z]+@neu\.edu\.ph$')
-        .hasMatch(val.trim())) {
-      return 'Must be firstname.lastname@neu.edu.ph';
+    if (val == null || val.trim().isEmpty) return 'Email is required';
+    if (!val.trim().contains('@')) return 'Enter a valid email address';
+    if (!val.trim().toLowerCase().endsWith('@neu.edu.ph')) {
+      return 'Must be an official NEU email (@neu.edu.ph)';
     }
     return null;
   }
 
+  // Validate: NEU student ID format ##-#####-###
   String? _validateStudentId(String? val) {
-    if (val == null || val.trim().isEmpty) return 'Required';
+    if (val == null || val.trim().isEmpty) return 'Student ID is required';
     if (!RegExp(r'^\d{2}-\d{5}-\d{3}$').hasMatch(val.trim())) {
-      return 'Format: ##-#####-### (e.g. 19-10975-366)';
+      return 'Invalid format — e.g. 26-12345-123';
     }
     return null;
   }
@@ -1462,7 +1486,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
               contentPadding: const EdgeInsets.fromLTRB(24, 32, 24, 24),
               content: Column(mainAxisSize: MainAxisSize.min, children: [
                 Container(width: 72, height: 72,
-                  decoration: BoxDecoration(color: AppTheme.success.withOpacity(0.12), shape: BoxShape.circle),
+                  decoration: BoxDecoration(color: const Color(0x1F06D6A0), shape: BoxShape.circle),
                   child: const Icon(Icons.check_circle_rounded, color: AppTheme.success, size: 40)),
                 const SizedBox(height: 20),
                 const Text('Account Created!', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: AppTheme.textDark)),
@@ -1555,6 +1579,50 @@ class _SignUpScreenState extends State<SignUpScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
 
+                        // ── NEU Students Only Banner ──
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: const Color(0x1A1B3A8C),
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(color: AppTheme.primary.withAlpha(50)),
+                          ),
+                          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            Container(
+                              width: 36, height: 36,
+                              decoration: BoxDecoration(
+                                color: AppTheme.primary,
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: const Icon(Icons.school_rounded,
+                                  color: Colors.white, size: 20),
+                            ),
+                            const SizedBox(width: 12),
+                            const Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text('NEU Students Only',
+                                      style: TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 13,
+                                          color: AppTheme.primary)),
+                                  SizedBox(height: 4),
+                                  Text(
+                                    'This system is exclusively for students of New Era University — College of Engineering and Architecture. Registration requires a valid NEU email address (@neu.edu.ph) and your official student ID number.',
+                                    style: TextStyle(
+                                        fontSize: 11,
+                                        color: AppTheme.textMid,
+                                        height: 1.4),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ]),
+                        ),
+                        const SizedBox(height: 20),
+
                         // ── SECTION: Identity Verification ──
                         _SectionDivider(
                           icon: Icons.verified_user_outlined,
@@ -1564,7 +1632,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
                         const SizedBox(height: 16),
 
                         // Institutional Email
-                        _FieldLabel('Institutional Email'),
+                        _FieldLabel('NEU Email Address'),
                         const SizedBox(height: 8),
                         TextFormField(
                           controller: _emailCtrl,
@@ -1573,7 +1641,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
                           validator: _validateEmail,
                           onChanged: (_) => setState(() {}),
                           decoration: InputDecoration(
-                            hintText: 'juan.delacruz@neu.edu.ph',
+                            hintText: 'yourname@neu.edu.ph',
                             prefixIcon: const Icon(Icons.email_outlined,
                                 color: AppTheme.textMid),
                             suffixIcon: _emailCtrl.text.isNotEmpty
@@ -1590,13 +1658,41 @@ class _SignUpScreenState extends State<SignUpScreen> {
                           ),
                         ),
                         const SizedBox(height: 5),
-                        const Text('Format: firstname.lastname@neu.edu.ph',
+                        Row(children: [
+                          Icon(
+                            _emailCtrl.text.isEmpty
+                                ? Icons.info_outline_rounded
+                                : _emailValid
+                                    ? Icons.check_circle_outline_rounded
+                                    : Icons.error_outline_rounded,
+                            size: 12,
+                            color: _emailCtrl.text.isEmpty
+                                ? AppTheme.textLight
+                                : _emailValid
+                                    ? AppTheme.success
+                                    : AppTheme.danger,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            _emailCtrl.text.isEmpty
+                                ? 'Must end with @neu.edu.ph'
+                                : _emailValid
+                                    ? 'Valid NEU email ✓'
+                                    : 'Only @neu.edu.ph emails are accepted',
                             style: TextStyle(
-                                fontSize: 11, color: AppTheme.textLight)),
+                              fontSize: 11,
+                              color: _emailCtrl.text.isEmpty
+                                  ? AppTheme.textLight
+                                  : _emailValid
+                                      ? AppTheme.success
+                                      : AppTheme.danger,
+                            ),
+                          ),
+                        ]),
                         const SizedBox(height: 16),
 
                         // Student ID
-                        _FieldLabel('Student ID'),
+                        _FieldLabel('Student ID Number'),
                         const SizedBox(height: 8),
                         TextFormField(
                           controller: _studentIdCtrl,
@@ -1605,7 +1701,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
                           validator: _validateStudentId,
                           onChanged: (_) => setState(() {}),
                           decoration: InputDecoration(
-                            hintText: '19-10975-366',
+                            hintText: '26-12345-123',
                             prefixIcon: const Icon(Icons.badge_outlined,
                                 color: AppTheme.textMid),
                             suffixIcon: _studentIdCtrl.text.isNotEmpty
@@ -1622,29 +1718,57 @@ class _SignUpScreenState extends State<SignUpScreen> {
                           ),
                         ),
                         const SizedBox(height: 5),
-                        const Text('Format: ##-#####-### (e.g. 19-10975-366)',
+                        Row(children: [
+                          Icon(
+                            _studentIdCtrl.text.isEmpty
+                                ? Icons.info_outline_rounded
+                                : _idValid
+                                    ? Icons.check_circle_outline_rounded
+                                    : Icons.error_outline_rounded,
+                            size: 12,
+                            color: _studentIdCtrl.text.isEmpty
+                                ? AppTheme.textLight
+                                : _idValid
+                                    ? AppTheme.success
+                                    : AppTheme.danger,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            _studentIdCtrl.text.isEmpty
+                                ? 'Format: 26-12345-123'
+                                : _idValid
+                                    ? 'Valid student ID format ✓'
+                                    : 'Invalid format — check your ID number',
                             style: TextStyle(
-                                fontSize: 11, color: AppTheme.textLight)),
+                              fontSize: 11,
+                              color: _studentIdCtrl.text.isEmpty
+                                  ? AppTheme.textLight
+                                  : _idValid
+                                      ? AppTheme.success
+                                      : AppTheme.danger,
+                            ),
+                          ),
+                        ]),
                         const SizedBox(height: 20),
 
-                        // Info box
+                        // Verification info box
                         Container(
                           padding: const EdgeInsets.all(14),
                           decoration: BoxDecoration(
-                            color: AppTheme.accent.withOpacity(0.06),
+                            color: const Color(0x0FF5A623),
                             borderRadius: BorderRadius.circular(12),
                             border: Border.all(
-                                color: AppTheme.accent.withOpacity(0.2)),
+                                color: const Color(0x33F5A623)),
                           ),
                           child: const Row(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Icon(Icons.info_outline_rounded,
+                              Icon(Icons.verified_user_outlined,
                                   size: 16, color: AppTheme.accent),
                               SizedBox(width: 10),
                               Expanded(
                                 child: Text(
-                                    'Your institutional email and Student ID are used to verify that you are an enrolled student. These must match your school records.',
+                                    'Your NEU email and Student ID are used to verify that you are an enrolled CEA student. Accounts with non-NEU emails or invalid student IDs will not be approved by laboratory staff.',
                                     style: TextStyle(
                                         fontSize: 12,
                                         color: AppTheme.textMid,
@@ -1916,7 +2040,7 @@ class _SectionDivider extends StatelessWidget {
           width: 30,
           height: 30,
           decoration: BoxDecoration(
-            color: color.withOpacity(0.1),
+            color: color.withAlpha(26),
             borderRadius: BorderRadius.circular(8),
           ),
           child: Icon(icon, color: color, size: 16),
@@ -2077,7 +2201,7 @@ class _StudentDashboardState extends State<_StudentDashboard> {
   @override
   void initState() {
     super.initState();
-    _load();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
   }
 
   Future<void> _load() async {
@@ -2160,111 +2284,192 @@ class _StudentDashboardState extends State<_StudentDashboard> {
 
   @override
   Widget build(BuildContext context) {
+    final now = DateTime.now();
+    final hour = now.hour;
+    final greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+
     return Scaffold(
-      backgroundColor: AppTheme.surface,
+      backgroundColor: const Color(0xFFF0F4FF),
       body: RefreshIndicator(
         onRefresh: _load,
         child: CustomScrollView(
           slivers: [
-            SliverAppBar(
-              expandedHeight: 200,
-              pinned: true,
-              backgroundColor: AppTheme.primary,
-              flexibleSpace: FlexibleSpaceBar(
-                background: Container(
-                  decoration: const BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [AppTheme.primary, AppTheme.primaryDark],
-                    ),
+            // ── Hero Header ──────────────────────────────────────────────────
+            SliverToBoxAdapter(
+              child: Container(
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [Color(0xFF0D2257), Color(0xFF1B3A8C), Color(0xFF1E4DB7)],
                   ),
+                ),
+                child: SafeArea(
+                  bottom: false,
                   child: Stack(
                     children: [
-                      // Background watermark icon
-                      Positioned(
-                        right: -20, bottom: -20,
-                        child: Icon(Icons.science_rounded,
-                            size: 160,
-                            color: Colors.white.withOpacity(0.04)),
-                      ),
+                      // Decorative circles
+                      Positioned(top: -30, right: -30,
+                        child: Container(width: 130, height: 130,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: const Color(0x0AFFFFFF)))),
+                      Positioned(top: 40, right: 40,
+                        child: Container(width: 60, height: 60,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: const Color(0x1FF5A623)))),
+                      Positioned(bottom: -10, left: -20,
+                        child: Container(width: 90, height: 90,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: const Color(0x08FFFFFF)))),
+
                       Padding(
-                        padding: const EdgeInsets.fromLTRB(20, 48, 20, 16),
+                        padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            // System name + notification bell row
+                            // Top bar — logo + notification
                             Row(
-                              crossAxisAlignment: CrossAxisAlignment.center,
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
-                                Container(
-                                  width: 36, height: 36,
-                                  decoration: BoxDecoration(
-                                    color: AppTheme.accent.withOpacity(0.2),
-                                    borderRadius: BorderRadius.circular(10),
-                                  ),
-                                  child: const Icon(Icons.science_rounded,
-                                      color: AppTheme.accent, size: 20),
-                                ),
-                                const SizedBox(width: 10),
-                                const Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
+                                // System tag
+                                Row(children: [
+                                  Container(
+                                    width: 32, height: 32,
+                                    decoration: BoxDecoration(
+                                      color: const Color(0x33F5A623),
+                                      borderRadius: BorderRadius.circular(9),
+                                    ),
+                                    child: const Icon(Icons.science_rounded,
+                                        color: Color(0xFFF5A623), size: 18)),
+                                  const SizedBox(width: 8),
+                                  Column(crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: const [
                                       Text('LabTrack',
-                                          style: TextStyle(
-                                              color: AppTheme.accent,
-                                              fontSize: 13,
-                                              fontWeight: FontWeight.w800,
-                                              letterSpacing: 1)),
-                                      Text('CEA Laboratory · New Era University',
-                                          style: TextStyle(
-                                              color: AppTheme.textLight,
-                                              fontSize: 10)),
-                                    ],
-                                  ),
-                                ),
-                                Stack(
-                                  children: [
-                                    IconButton(
-                                        icon: const Icon(
-                                            Icons.notifications_outlined,
-                                            color: Colors.white, size: 22),
-                                        onPressed: () {}),
-                                    if (_notifications.isNotEmpty)
-                                      Positioned(
-                                        right: 8, top: 8,
-                                        child: Container(
-                                          width: 7, height: 7,
-                                          decoration: const BoxDecoration(
-                                              color: AppTheme.danger,
-                                              shape: BoxShape.circle),
-                                        ),
+                                        style: TextStyle(color: Color(0xFFF5A623),
+                                          fontSize: 12, fontWeight: FontWeight.w800,
+                                          letterSpacing: 0.8)),
+                                      Text('CEA Lab · NEU',
+                                        style: TextStyle(color: Color(0x99FFFFFF),
+                                          fontSize: 9)),
+                                    ]),
+                                ]),
+                                // Notification bell
+                                GestureDetector(
+                                  onTap: () {},
+                                  child: Stack(children: [
+                                    Container(
+                                      width: 38, height: 38,
+                                      decoration: BoxDecoration(
+                                        color: const Color(0x1AFFFFFF),
+                                        borderRadius: BorderRadius.circular(11),
                                       ),
-                                  ],
+                                      child: const Icon(Icons.notifications_outlined,
+                                          color: Colors.white, size: 20)),
+                                    if (_notifications.isNotEmpty)
+                                      Positioned(top: 6, right: 6,
+                                        child: Container(
+                                          width: 8, height: 8,
+                                          decoration: const BoxDecoration(
+                                            color: Color(0xFFEF4444),
+                                            shape: BoxShape.circle))),
+                                  ]),
                                 ),
                               ],
                             ),
-                            const SizedBox(height: 14),
-                            // System title
+                            const SizedBox(height: 20),
+
+                            // System title — the main identity
                             const Text(
-                              'Equipment Borrowing\n& Return Monitoring',
+                              'Mobile Equipment Borrowing\n& Return Monitoring System',
                               style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 20,
-                                  fontWeight: FontWeight.bold,
-                                  height: 1.2),
+                                color: Colors.white,
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                                height: 1.25,
+                                letterSpacing: 0.1,
+                              ),
                             ),
-                            const SizedBox(height: 6),
-                            Row(children: [
-                              const Icon(Icons.person_outline_rounded,
-                                  color: AppTheme.textLight, size: 13),
-                              const SizedBox(width: 4),
-                              Text('Welcome, ${Session.name}',
-                                  style: const TextStyle(
-                                      color: AppTheme.textLight,
-                                      fontSize: 12)),
-                            ]),
+                            const SizedBox(height: 4),
+                            const Text('for School Laboratories',
+                              style: TextStyle(color: Color(0xFFF5A623),
+                                fontSize: 12, fontWeight: FontWeight.w500)),
+                            const SizedBox(height: 16),
+
+                            // User greeting chip
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 12, vertical: 7),
+                              decoration: BoxDecoration(
+                                color: const Color(0x1AFFFFFF),
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(
+                                    color: const Color(0x26FFFFFF)),
+                              ),
+                              child: Row(mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  CircleAvatar(
+                                    radius: 12,
+                                    backgroundColor: const Color(0xFFF5A623)
+                                        .withOpacity(0.25),
+                                    child: Text(Session.initials,
+                                      style: const TextStyle(
+                                        color: Color(0xFFF5A623),
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.bold)),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text('$greeting, ${Session.name.split(' ').first}',
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w500)),
+                                ]),
+                            ),
+                            const SizedBox(height: 20),
+
+                            // ── Stats row inside header ──
+                            if (!_loading)
+                              Row(children: [
+                                _HeroStat(
+                                  value: '${_activeLoans.length}',
+                                  label: 'Active\nLoans',
+                                  icon: Icons.inventory_2_rounded,
+                                  accent: const Color(0xFFF5A623),
+                                ),
+                                const SizedBox(width: 10),
+                                _HeroStat(
+                                  value: '$_dueToday',
+                                  label: 'Due\nToday',
+                                  icon: Icons.schedule_rounded,
+                                  accent: const Color(0xFFFFB703),
+                                ),
+                                const SizedBox(width: 10),
+                                _HeroStat(
+                                  value: '${_pendingLoans.length}',
+                                  label: 'Pending\nRequests',
+                                  icon: Icons.pending_actions_rounded,
+                                  accent: const Color(0xFF60A5FA),
+                                ),
+                                const SizedBox(width: 10),
+                                _HeroStat(
+                                  value: '$_overdue',
+                                  label: 'Over-\ndue',
+                                  icon: Icons.warning_amber_rounded,
+                                  accent: _overdue > 0
+                                      ? const Color(0xFFEF4444)
+                                      : const Color(0xFF06D6A0),
+                                ),
+                              ]),
+                            if (_loading)
+                              const Padding(
+                                padding: EdgeInsets.symmetric(vertical: 16),
+                                child: Center(child: CircularProgressIndicator(
+                                    color: Colors.white, strokeWidth: 2)),
+                              ),
+                            const SizedBox(height: 8),
                           ],
                         ),
                       ),
@@ -2274,227 +2479,143 @@ class _StudentDashboardState extends State<_StudentDashboard> {
               ),
             ),
 
-            if (_loading)
-              const SliverFillRemaining(
-                child: Center(child: CircularProgressIndicator()))
-            else
+            if (!_loading)
               SliverToBoxAdapter(
                 child: Padding(
                   padding: const EdgeInsets.all(20),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // ── Live Stats ──
-                      Row(children: [
-                        _StatCard(
-                            label: 'Active Loans',
-                            value: '${_activeLoans.length}',
-                            icon: Icons.inventory_2_rounded,
-                            color: AppTheme.accent),
-                        const SizedBox(width: 12),
-                        _StatCard(
-                            label: 'Due Today',
-                            value: '$_dueToday',
-                            icon: Icons.schedule_rounded,
-                            color: AppTheme.warning),
-                        const SizedBox(width: 12),
-                        _StatCard(
-                            label: 'Overdue',
-                            value: '$_overdue',
-                            icon: Icons.warning_amber_rounded,
-                            color: _overdue > 0 ? AppTheme.danger : AppTheme.success),
-                      ]),
-                      const SizedBox(height: 16),
 
-                      // ── System Identity Banner ──
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                            colors: [
-                              AppTheme.primary.withOpacity(0.08),
-                              AppTheme.accent.withOpacity(0.06),
-                            ],
-                          ),
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(
-                              color: AppTheme.primary.withOpacity(0.15)),
-                        ),
-                        child: Row(children: [
-                          Container(
-                            width: 44, height: 44,
-                            decoration: BoxDecoration(
-                              color: AppTheme.primary.withOpacity(0.1),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: const Icon(Icons.science_rounded,
-                                color: AppTheme.primary, size: 24),
-                          ),
-                          const SizedBox(width: 14),
-                          const Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'Mobile Equipment Borrowing\n& Return Monitoring System',
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.bold,
-                                    color: AppTheme.primary,
-                                    height: 1.3,
-                                  ),
-                                ),
-                                SizedBox(height: 3),
-                                Text(
-                                  'School Laboratories · CEA · New Era University',
-                                  style: TextStyle(
-                                      fontSize: 11,
-                                      color: AppTheme.textMid),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ]),
-                      ),
-                      const SizedBox(height: 24),
-
-                      // ── Live Notifications ──
-                      const SectionHeader(title: 'Notifications'),
-                      const SizedBox(height: 12),
-                      if (_notifications.isEmpty)
-                        Container(
-                          padding: const EdgeInsets.all(20),
-                          decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(16)),
-                          child: const Center(
-                            child: Column(children: [
-                              Icon(Icons.notifications_none_rounded,
-                                  size: 36, color: AppTheme.textLight),
-                              SizedBox(height: 8),
-                              Text('No notifications',
-                                  style: TextStyle(color: AppTheme.textMid, fontSize: 13)),
-                            ]),
-                          ),
-                        )
-                      else
-                        ..._notifications.map((n) => Padding(
-                          padding: const EdgeInsets.only(bottom: 10),
-                          child: _NotificationCard(
+                      // ── Alerts / Notifications ──────────────────────────
+                      if (_notifications.isNotEmpty) ...[
+                        _SectionTitle(title: 'Alerts', icon: Icons.notifications_active_rounded,
+                            color: const Color(0xFFEF4444)),
+                        const SizedBox(height: 10),
+                        ..._notifications.take(3).map((n) => Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: _AlertCard(
                             icon:  n['icon'] as IconData,
                             color: n['color'] as Color,
                             title: n['title'] as String,
                             body:  n['body']  as String,
-                            time:  'Now',
                           ),
                         )),
-                      const SizedBox(height: 24),
+                        const SizedBox(height: 20),
+                      ],
 
-                      // ── Quick Actions ──
-                      const SectionHeader(title: 'Quick Actions'),
+                      // ── Quick Actions ────────────────────────────────────
+                      _SectionTitle(title: 'Quick Actions',
+                          icon: Icons.flash_on_rounded,
+                          color: const Color(0xFFF5A623)),
                       const SizedBox(height: 12),
                       Row(children: [
-                        _QuickAction(
-                            icon: Icons.add_circle_outline_rounded,
-                            label: 'New Request',
-                            color: AppTheme.accent,
-                            onTap: () => Navigator.push(context,
-                                MaterialPageRoute(builder: (_) => const BorrowRequestScreen()))),
-                        const SizedBox(width: 12),
-                        _QuickAction(
-                            icon: Icons.report_problem_outlined,
-                            label: 'Report',
-                            color: AppTheme.warning,
-                            onTap: () => Navigator.push(context,
-                                MaterialPageRoute(builder: (_) => const DamageReportScreen()))),
-                        const SizedBox(width: 12),
-                        _QuickAction(
-                            icon: Icons.receipt_long_rounded,
-                            label: 'My Loans',
-                            color: AppTheme.primary,
-                            onTap: () => Navigator.push(context,
-                                MaterialPageRoute(builder: (_) => const MyBorrowingsScreen()))),
-                        const SizedBox(width: 12),
-                        _QuickAction(
-                            icon: Icons.history_rounded,
-                            label: 'History',
-                            color: AppTheme.textMid,
-                            onTap: () => Navigator.push(context,
-                                MaterialPageRoute(builder: (_) => const MyBorrowingsScreen()))),
+                        _ActionTile(
+                          icon: Icons.add_circle_rounded,
+                          label: 'New\nRequest',
+                          gradient: const [Color(0xFF1B3A8C), Color(0xFF1E4DB7)],
+                          onTap: () => Navigator.push(context,
+                              MaterialPageRoute(builder: (_) => const BorrowRequestScreen())),
+                        ),
+                        const SizedBox(width: 10),
+                        _ActionTile(
+                          icon: Icons.receipt_long_rounded,
+                          label: 'My\nLoans',
+                          gradient: const [Color(0xFF059669), Color(0xFF10B981)],
+                          onTap: () => Navigator.push(context,
+                              MaterialPageRoute(builder: (_) => const MyBorrowingsScreen())),
+                        ),
+                        const SizedBox(width: 10),
+                        _ActionTile(
+                          icon: Icons.report_problem_rounded,
+                          label: 'Damage\nReport',
+                          gradient: const [Color(0xFFD97706), Color(0xFFF59E0B)],
+                          onTap: () => Navigator.push(context,
+                              MaterialPageRoute(builder: (_) => const DamageReportScreen())),
+                        ),
+                        const SizedBox(width: 10),
+                        _ActionTile(
+                          icon: Icons.policy_rounded,
+                          label: 'Lab\nPolicies',
+                          gradient: const [Color(0xFF7C3AED), Color(0xFF8B5CF6)],
+                          onTap: () => Navigator.push(context,
+                              MaterialPageRoute(builder: (_) => const LabPoliciesScreen())),
+                        ),
                       ]),
                       const SizedBox(height: 24),
 
-                      // ── Live Active Loans ──
-                      SectionHeader(
-                          title: 'Active Loans',
-                          action: _activeLoans.isNotEmpty ? 'See all' : null,
-                          onAction: () => Navigator.push(context,
-                              MaterialPageRoute(builder: (_) => const MyBorrowingsScreen()))),
+                      // ── Active Loans ─────────────────────────────────────
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          _SectionTitle(title: 'Active Loans',
+                              icon: Icons.inventory_2_rounded,
+                              color: const Color(0xFF1B3A8C)),
+                          if (_activeLoans.isNotEmpty || _pendingLoans.isNotEmpty)
+                            GestureDetector(
+                              onTap: () => Navigator.push(context,
+                                  MaterialPageRoute(builder: (_) => const MyBorrowingsScreen())),
+                              child: const Text('See all',
+                                style: TextStyle(
+                                  color: Color(0xFF1B3A8C),
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                )),
+                            ),
+                        ],
+                      ),
                       const SizedBox(height: 12),
+
                       if (_activeLoans.isEmpty && _pendingLoans.isEmpty)
-                        Container(
-                          padding: const EdgeInsets.all(20),
-                          decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(16)),
-                          child: const Center(
-                            child: Column(children: [
-                              Icon(Icons.inventory_2_outlined,
-                                  size: 36, color: AppTheme.textLight),
-                              SizedBox(height: 8),
-                              Text('No active loans',
-                                  style: TextStyle(color: AppTheme.textMid, fontSize: 13)),
-                            ]),
-                          ),
+                        _EmptyCard(
+                          icon: Icons.inventory_2_outlined,
+                          title: 'No active loans',
+                          subtitle: 'Tap "New Request" to borrow equipment',
                         )
                       else ...[
-                        // Show pending first
-                        ..._pendingLoans.take(2).map((e) {
-                          return Padding(
-                            padding: const EdgeInsets.only(bottom: 10),
-                            child: _LoanCard(
-                              name: e['equipment_name'] ?? '',
-                              id:   e['qr_code'] ?? '',
-                              dueDate: 'Awaiting approval',
-                              statusColor: AppTheme.accent,
-                              statusLabel: 'Pending',
-                            ),
-                          );
-                        }),
-                        // Then active/approved
+                        ..._pendingLoans.take(2).map((e) => Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: _LoanItemCard(
+                            name: '${e['equipment_name'] ?? ''}',
+                            qr: '${e['qr_code'] ?? ''}',
+                            status: 'Pending',
+                            statusColor: const Color(0xFFF5A623),
+                            subtitle: 'Awaiting staff approval',
+                            icon: Icons.pending_actions_rounded,
+                          ),
+                        )),
                         ..._activeLoans.take(3).map((e) {
                           final due = DateTime.tryParse(
                               '${e['due_date']}'.replaceAll(' ', 'T'));
-                          final now = DateTime.now();
-                          final isOverdue = due != null && due.isBefore(now);
+                          final now2 = DateTime.now();
+                          final isOverdue = due != null && due.isBefore(now2);
                           final isDueToday = due != null &&
-                              due.year == now.year &&
-                              due.month == now.month &&
-                              due.day == now.day;
-                          final statusLabel = isOverdue
-                              ? 'Overdue'
-                              : isDueToday
-                                  ? 'Due Today'
-                                  : 'Active';
+                              due.year == now2.year &&
+                              due.month == now2.month &&
+                              due.day == now2.day;
+                          final status = isOverdue ? 'Overdue'
+                              : isDueToday ? 'Due Today' : 'Active';
                           final statusColor = isOverdue
-                              ? AppTheme.danger
+                              ? const Color(0xFFEF4444)
                               : isDueToday
-                                  ? AppTheme.warning
-                                  : AppTheme.success;
+                                  ? const Color(0xFFD97706)
+                                  : const Color(0xFF059669);
                           final dueStr = due != null
-                              ? '${due.month}/${due.day}, 5:00 PM'
+                              ? '${due.month}/${due.day} · 5:00 PM'
                               : '';
                           return Padding(
                             padding: const EdgeInsets.only(bottom: 10),
-                            child: _LoanCard(
-                              name: e['equipment_name'] ?? '',
-                              id:   e['qr_code'] ?? '',
-                              dueDate: dueStr,
+                            child: _LoanItemCard(
+                              name: '${e['equipment_name'] ?? ''}',
+                              qr: '${e['qr_code'] ?? ''}',
+                              status: status,
                               statusColor: statusColor,
-                              statusLabel: statusLabel,
+                              subtitle: 'Return by $dueStr',
+                              icon: isOverdue
+                                  ? Icons.warning_amber_rounded
+                                  : isDueToday
+                                      ? Icons.access_alarm_rounded
+                                      : Icons.check_circle_outline_rounded,
                             ),
                           );
                         }),
@@ -2511,53 +2632,134 @@ class _StudentDashboardState extends State<_StudentDashboard> {
   }
 }
 
-class _StatCard extends StatelessWidget {
-  final String label, value;
-  final IconData icon;
-  final Color color;
-  const _StatCard(
-      {required this.label,
-      required this.value,
-      required this.icon,
-      required this.color});
+// ── Dashboard Helper Widgets ──────────────────────────────────────────────────
 
+class _HeroStat extends StatelessWidget {
+  final String value, label;
+  final IconData icon;
+  final Color accent;
+  const _HeroStat({required this.value, required this.label,
+      required this.icon, required this.accent});
   @override
   Widget build(BuildContext context) {
     return Expanded(
-      child: SizedBox(
-        height: 94,
-        child: Container(
-          padding: const EdgeInsets.all(12),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+        decoration: BoxDecoration(
+          color: const Color(0x1AFFFFFF),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: const Color(0x1FFFFFFF)),
+        ),
+        child: Column(children: [
+          Icon(icon, color: accent, size: 18),
+          const SizedBox(height: 5),
+          Text(value, style: const TextStyle(
+              color: Colors.white, fontSize: 18,
+              fontWeight: FontWeight.bold)),
+          const SizedBox(height: 2),
+          Text(label, textAlign: TextAlign.center,
+              style: const TextStyle(color: Color(0xAAFFFFFF),
+                  fontSize: 9, height: 1.2)),
+        ]),
+      ),
+    );
+  }
+}
+
+class _SectionTitle extends StatelessWidget {
+  final String title;
+  final IconData icon;
+  final Color color;
+  const _SectionTitle({required this.title, required this.icon, required this.color});
+  @override
+  Widget build(BuildContext context) {
+    return Row(children: [
+      Container(
+        width: 28, height: 28,
+        decoration: BoxDecoration(
+            color: color.withAlpha(31),
+            borderRadius: BorderRadius.circular(8)),
+        child: Icon(icon, color: color, size: 15),
+      ),
+      const SizedBox(width: 8),
+      Text(title, style: TextStyle(
+          fontSize: 14, fontWeight: FontWeight.bold, color: color)),
+    ]);
+  }
+}
+
+class _AlertCard extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final String title, body;
+  const _AlertCard({required this.icon, required this.color,
+      required this.title, required this.body});
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border(left: BorderSide(color: color, width: 4)),
+        boxShadow: [BoxShadow(color: color.withAlpha(15),
+            blurRadius: 8, offset: const Offset(0, 2))],
+      ),
+      child: Row(children: [
+        Container(
+          width: 34, height: 34,
           decoration: BoxDecoration(
-            color: Colors.white,
+              color: color.withAlpha(26),
+              borderRadius: BorderRadius.circular(9)),
+          child: Icon(icon, color: color, size: 18)),
+        const SizedBox(width: 12),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title, style: const TextStyle(
+                fontSize: 13, fontWeight: FontWeight.bold,
+                color: Color(0xFF1A1D2E))),
+            const SizedBox(height: 2),
+            Text(body, style: const TextStyle(
+                fontSize: 12, color: Color(0xFF6B7280), height: 1.3)),
+          ])),
+      ]),
+    );
+  }
+}
+
+class _ActionTile extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final List<Color> gradient;
+  final VoidCallback onTap;
+  const _ActionTile({required this.icon, required this.label,
+      required this.gradient, required this.onTap});
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          height: 80,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: gradient),
             borderRadius: BorderRadius.circular(16),
-            boxShadow: [
-              BoxShadow(
-                  color: color.withOpacity(0.1),
-                  blurRadius: 10,
-                  offset: const Offset(0, 4))
-            ],
+            boxShadow: [BoxShadow(
+                color: gradient.last.withOpacity(0.3),
+                blurRadius: 8, offset: const Offset(0, 4))],
           ),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icon, color: color, size: 20),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(value,
-                      style: TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                          color: color)),
-                  Text(label,
-                      style: const TextStyle(
-                          fontSize: 10, color: AppTheme.textMid),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis),
-                ],
-              ),
+              Icon(icon, color: Colors.white, size: 22),
+              const SizedBox(height: 5),
+              Text(label, textAlign: TextAlign.center,
+                  style: const TextStyle(
+                      color: Colors.white, fontSize: 10,
+                      fontWeight: FontWeight.w600, height: 1.2)),
             ],
           ),
         ),
@@ -2565,6 +2767,86 @@ class _StatCard extends StatelessWidget {
     );
   }
 }
+
+class _LoanItemCard extends StatelessWidget {
+  final String name, qr, status, subtitle;
+  final Color statusColor;
+  final IconData icon;
+  const _LoanItemCard({required this.name, required this.qr,
+      required this.status, required this.subtitle,
+      required this.statusColor, required this.icon});
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [BoxShadow(color: const Color(0x0A000000),
+            blurRadius: 8, offset: const Offset(0, 2))],
+      ),
+      child: Row(children: [
+        Container(
+          width: 42, height: 42,
+          decoration: BoxDecoration(
+              color: statusColor.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(12)),
+          child: Icon(icon, color: statusColor, size: 20)),
+        const SizedBox(width: 12),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(name, style: const TextStyle(
+                fontSize: 13, fontWeight: FontWeight.bold,
+                color: Color(0xFF1A1D2E))),
+            const SizedBox(height: 2),
+            Text(subtitle, style: const TextStyle(
+                fontSize: 11, color: Color(0xFF6B7280))),
+            const SizedBox(height: 4),
+            Text(qr, style: const TextStyle(
+                fontSize: 10, color: Color(0xFF9CA3AF),
+                fontFamily: 'Courier New')),
+          ])),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          decoration: BoxDecoration(
+              color: statusColor.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(20)),
+          child: Text(status, style: TextStyle(
+              fontSize: 11, fontWeight: FontWeight.bold,
+              color: statusColor))),
+      ]),
+    );
+  }
+}
+
+class _EmptyCard extends StatelessWidget {
+  final IconData icon;
+  final String title, subtitle;
+  const _EmptyCard({required this.icon, required this.title, required this.subtitle});
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 20),
+      decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [BoxShadow(color: const Color(0x08000000),
+              blurRadius: 8, offset: const Offset(0, 2))]),
+      child: Center(child: Column(children: [
+        Icon(icon, size: 36, color: const Color(0xFF9CA3AF)),
+        const SizedBox(height: 8),
+        Text(title, style: const TextStyle(
+            fontWeight: FontWeight.bold, fontSize: 14,
+            color: Color(0xFF374151))),
+        const SizedBox(height: 4),
+        Text(subtitle, style: const TextStyle(
+            fontSize: 12, color: Color(0xFF9CA3AF))),
+      ])),
+    );
+  }
+}
+
+
 
 class _QuickAction extends StatelessWidget {
   final IconData icon;
@@ -2586,7 +2868,7 @@ class _QuickAction extends StatelessWidget {
           height: 72,
           padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
           decoration: BoxDecoration(
-            color: color.withOpacity(0.1),
+            color: color.withAlpha(26),
             borderRadius: BorderRadius.circular(14),
             border: Border.all(color: color.withOpacity(0.2)),
           ),
@@ -2636,7 +2918,7 @@ class _LoanCard extends StatelessWidget {
             width: 44,
             height: 44,
             decoration: BoxDecoration(
-              color: AppTheme.primary.withOpacity(0.08),
+              color: const Color(0x141B3A8C),
               borderRadius: BorderRadius.circular(12),
             ),
             child: const Icon(Icons.science_outlined,
@@ -2701,7 +2983,7 @@ class _NotificationCard extends StatelessWidget {
             width: 38,
             height: 38,
             decoration: BoxDecoration(
-                color: color.withOpacity(0.12), shape: BoxShape.circle),
+                color: color.withAlpha(31), shape: BoxShape.circle),
             child: Icon(icon, color: color, size: 18),
           ),
           const SizedBox(width: 12),
@@ -2845,7 +3127,7 @@ class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
                     prefixIcon: const Icon(Icons.search_rounded,
                         color: AppTheme.textLight),
                     filled: true,
-                    fillColor: Colors.white.withOpacity(0.1),
+                    fillColor: const Color(0x1AFFFFFF),
                     border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
                         borderSide: BorderSide.none),
@@ -2867,12 +3149,12 @@ class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
                     padding: const EdgeInsets.symmetric(
                         horizontal: 14, vertical: 10),
                     decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.1),
+                      color: const Color(0x1AFFFFFF),
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(
                           color: _selectedCategories.isNotEmpty
                               ? AppTheme.accent
-                              : Colors.white.withOpacity(0.2),
+                              : const Color(0x33FFFFFF),
                           width: _selectedCategories.isNotEmpty ? 1.5 : 1),
                     ),
                     child: Row(
@@ -2902,7 +3184,7 @@ class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
                               padding: const EdgeInsets.symmetric(
                                   horizontal: 8, vertical: 2),
                               decoration: BoxDecoration(
-                                  color: AppTheme.accent.withOpacity(0.2),
+                                  color: const Color(0x33F5A623),
                                   borderRadius: BorderRadius.circular(10)),
                               child: const Row(
                                 mainAxisSize: MainAxisSize.min,
@@ -3042,7 +3324,7 @@ class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
                                     horizontal: 8, vertical: 2),
                                 decoration: BoxDecoration(
                                   color: checked
-                                      ? AppTheme.primary.withOpacity(0.1)
+                                      ? const Color(0x1A1B3A8C)
                                       : AppTheme.surface,
                                   borderRadius: BorderRadius.circular(10),
                                 ),
@@ -3089,11 +3371,11 @@ class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
                             padding: const EdgeInsets.symmetric(
                                 horizontal: 10, vertical: 4),
                             decoration: BoxDecoration(
-                              color: AppTheme.primary.withOpacity(0.1),
+                              color: const Color(0x1A1B3A8C),
                               borderRadius: BorderRadius.circular(20),
                               border: Border.all(
                                   color:
-                                      AppTheme.primary.withOpacity(0.3)),
+                                      const Color(0x4D1B3A8C)),
                             ),
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
@@ -3122,6 +3404,7 @@ class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
           Expanded(
             child: ListView.separated(
               padding: const EdgeInsets.all(16),
+              cacheExtent: 500,
               itemCount: filtered.length,
               separatorBuilder: (_, __) => const SizedBox(height: 10),
               itemBuilder: (_, i) {
@@ -3225,6 +3508,7 @@ class BorrowRequestScreen extends StatefulWidget {
 class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
   int _qty = 1;
   bool _loading = false;
+  bool _agreedToPolicies = false;
   final _nameCtrl    = TextEditingController();
   final _idCtrl      = TextEditingController();
   final _subjectCtrl = TextEditingController();
@@ -3234,10 +3518,54 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
   String _selectedEquipmentId   = '';
   String _selectedEquipmentName = '';
 
-  // Auto due date — today at 5:00 PM
-  DateTime get _dueDate {
+  // Borrow time — default now, return time — default 5:00 PM
+  TimeOfDay _borrowTime = TimeOfDay.now();
+  TimeOfDay _returnTime = const TimeOfDay(hour: 17, minute: 0);
+
+  // Build DateTime from today + selected TimeOfDay
+  DateTime _toDateTime(TimeOfDay t) {
     final now = DateTime.now();
-    return DateTime(now.year, now.month, now.day, 17, 0, 0);
+    return DateTime(now.year, now.month, now.day, t.hour, t.minute, 0);
+  }
+
+  String _formatTime(TimeOfDay t) {
+    final h = t.hourOfPeriod == 0 ? 12 : t.hourOfPeriod;
+    final m = t.minute.toString().padLeft(2, '0');
+    final p = t.period == DayPeriod.am ? 'AM' : 'PM';
+    return '$h:$m $p';
+  }
+
+  Future<void> _pickBorrowTime() async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: _borrowTime,
+      helpText: 'Select Borrow Time',
+    );
+    if (picked != null) setState(() => _borrowTime = picked);
+  }
+
+  Future<void> _pickReturnTime() async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: _returnTime,
+      helpText: 'Select Return Time',
+    );
+    if (picked != null) {
+      // Enforce max 5:00 PM
+      final maxReturn = const TimeOfDay(hour: 17, minute: 0);
+      if (picked.hour > 17 || (picked.hour == 17 && picked.minute > 0)) {
+        setState(() => _returnTime = maxReturn);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Return time cannot be later than 5:00 PM.'),
+            backgroundColor: AppTheme.warning,
+            behavior: SnackBarBehavior.floating,
+          ));
+        }
+      } else {
+        setState(() => _returnTime = picked);
+      }
+    }
   }
 
   @override
@@ -3341,7 +3669,7 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
                                   padding: const EdgeInsets.all(14),
                                   decoration: BoxDecoration(
                                     color: isSelected
-                                        ? AppTheme.primary.withOpacity(0.07)
+                                        ? const Color(0x121B3A8C)
                                         : Colors.white,
                                     borderRadius: BorderRadius.circular(14),
                                     border: Border.all(
@@ -3353,7 +3681,7 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
                                     Container(
                                       width: 40, height: 40,
                                       decoration: BoxDecoration(
-                                          color: AppTheme.success.withOpacity(0.1),
+                                          color: const Color(0x1A06D6A0),
                                           borderRadius: BorderRadius.circular(10)),
                                       child: const Icon(Icons.science_outlined,
                                           color: AppTheme.success, size: 20),
@@ -3397,6 +3725,14 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
             backgroundColor: AppTheme.danger));
       return;
     }
+    if (!_agreedToPolicies) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('Please read and agree to the Laboratory Policies first.'),
+            backgroundColor: AppTheme.danger,
+            behavior: SnackBarBehavior.floating));
+      return;
+    }
     setState(() => _loading = true);
     try {
       final res = await ApiService.borrowEquipment({
@@ -3406,8 +3742,8 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
         'student_number': _idCtrl.text.trim(),
         'subject':        _subjectCtrl.text.trim(),
         'quantity':       _qty,
-        'borrow_date':    DateTime.now().toIso8601String(),
-        'due_date':       _dueDate.toIso8601String(),
+        'borrow_date':    _toDateTime(_borrowTime).toIso8601String(),
+        'due_date':       _toDateTime(_returnTime).toIso8601String(),
         'purpose':        _purposeCtrl.text.trim(),
       });
       if (!mounted) return;
@@ -3463,12 +3799,12 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
                     color: _selectedEquipmentId.isEmpty
-                        ? AppTheme.accent.withOpacity(0.06)
-                        : AppTheme.success.withOpacity(0.06),
+                        ? const Color(0x0FF5A623)
+                        : const Color(0x0F06D6A0),
                     borderRadius: BorderRadius.circular(16),
                     border: Border.all(
                         color: _selectedEquipmentId.isEmpty
-                            ? AppTheme.accent.withOpacity(0.3)
+                            ? const Color(0x4DF5A623)
                             : AppTheme.success.withOpacity(0.3))),
                 child: Row(
                   children: [
@@ -3532,7 +3868,7 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
             const SizedBox(height: 16),
             _FieldLabel('Student ID'),
             const SizedBox(height: 8),
-            TextField(controller: _idCtrl, decoration: const InputDecoration(hintText: '2024-00123')),
+            TextField(controller: _idCtrl, decoration: const InputDecoration(hintText: '26-12345-123')),
             const SizedBox(height: 16),
             _FieldLabel('Subject / Section'),
             const SizedBox(height: 8),
@@ -3560,24 +3896,112 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
               ),
             ),
             const SizedBox(height: 16),
-            // Due time info — auto set to 5:00 PM today
+            // ── Time Selection ──
+            Row(children: [
+              // Borrow Time
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _FieldLabel('Borrow Time'),
+                    const SizedBox(height: 8),
+                    GestureDetector(
+                      onTap: _pickBorrowTime,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 13),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: AppTheme.divider),
+                        ),
+                        child: Row(children: [
+                          const Icon(Icons.access_time_rounded,
+                              color: AppTheme.primary, size: 18),
+                          const SizedBox(width: 8),
+                          Text(_formatTime(_borrowTime),
+                              style: const TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppTheme.textDark)),
+                        ]),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              // Return Time
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _FieldLabel('Return Time'),
+                    const SizedBox(height: 8),
+                    GestureDetector(
+                      onTap: _pickReturnTime,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 13),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                              color: _returnTime.hour >= 17
+                                  ? AppTheme.warning
+                                  : AppTheme.divider),
+                        ),
+                        child: Row(children: [
+                          Icon(Icons.timer_outlined,
+                              color: _returnTime.hour >= 17
+                                  ? AppTheme.warning
+                                  : AppTheme.primary,
+                              size: 18),
+                          const SizedBox(width: 8),
+                          Text(_formatTime(_returnTime),
+                              style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                  color: _returnTime.hour >= 17
+                                      ? AppTheme.warning
+                                      : AppTheme.textDark)),
+                        ]),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ]),
+            const SizedBox(height: 6),
+            const Text('⚠️ Equipment must be returned before 5:00 PM.',
+                style: TextStyle(fontSize: 11, color: AppTheme.textMid)),
+            const SizedBox(height: 16),
+            // ── Return Deadline info ──
             Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                color: AppTheme.warning.withOpacity(0.08),
+                color: const Color(0x14FFB703),
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: AppTheme.warning.withOpacity(0.3)),
+                border: Border.all(color: const Color(0x4DFFB703)),
               ),
               child: Row(children: [
-                const Icon(Icons.access_time_rounded, color: AppTheme.warning, size: 20),
+                const Icon(Icons.access_time_rounded,
+                    color: AppTheme.warning, size: 20),
                 const SizedBox(width: 10),
-                const Expanded(
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text('Return Deadline',
-                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.warning)),
-                    SizedBox(height: 2),
-                    Text('All equipment must be returned today before 5:00 PM.',
-                        style: TextStyle(fontSize: 12, color: AppTheme.textDark)),
+                Expanded(
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                    const Text('Return Deadline',
+                        style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: AppTheme.warning)),
+                    const SizedBox(height: 2),
+                    Text(
+                        'Selected return time: ${_formatTime(_returnTime)}. All equipment must be returned today.',
+                        style: const TextStyle(
+                            fontSize: 12, color: AppTheme.textDark)),
                   ]),
                 ),
               ]),
@@ -3590,7 +4014,97 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
               maxLines: 3,
               decoration: const InputDecoration(hintText: 'Describe the purpose of borrowing...'),
             ),
-            const SizedBox(height: 28),
+            const SizedBox(height: 20),
+
+            // ── Lab Policies Agreement ──
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: const Color(0x0A1B3A8C),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0x261B3A8C)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(children: [
+                    const Icon(Icons.policy_rounded,
+                        color: AppTheme.primary, size: 16),
+                    const SizedBox(width: 6),
+                    const Text('Laboratory Policies',
+                        style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.bold,
+                            color: AppTheme.primary)),
+                    const Spacer(),
+                    GestureDetector(
+                      onTap: () => Navigator.push(context,
+                          MaterialPageRoute(
+                              builder: (_) => const LabPoliciesScreen())),
+                      child: const Text('View All',
+                          style: TextStyle(
+                              fontSize: 12,
+                              color: AppTheme.accent,
+                              fontWeight: FontWeight.w600,
+                              decoration: TextDecoration.underline)),
+                    ),
+                  ]),
+                  const SizedBox(height: 10),
+                  // Quick policy reminders
+                  _PolicyReminder(
+                    icon: Icons.warning_amber_rounded,
+                    color: AppTheme.danger,
+                    text: 'Damaged or missing equipment must be replaced.',
+                  ),
+                  const SizedBox(height: 6),
+                  _PolicyReminder(
+                    icon: Icons.access_time_rounded,
+                    color: AppTheme.warning,
+                    text: 'Return before 5:00 PM. Late returns lose borrowing privileges.',
+                  ),
+                  const SizedBox(height: 6),
+                  _PolicyReminder(
+                    icon: Icons.today_rounded,
+                    color: AppTheme.primary,
+                    text: 'Reservations are for same-day use only.',
+                  ),
+                  const SizedBox(height: 10),
+                  // Agreement checkbox
+                  GestureDetector(
+                    onTap: () => setState(() => _agreedToPolicies = !_agreedToPolicies),
+                    child: Row(children: [
+                      AnimatedContainer(
+                        duration: const Duration(milliseconds: 150),
+                        width: 20, height: 20,
+                        decoration: BoxDecoration(
+                          color: _agreedToPolicies
+                              ? AppTheme.primary
+                              : Colors.white,
+                          borderRadius: BorderRadius.circular(5),
+                          border: Border.all(
+                              color: _agreedToPolicies
+                                  ? AppTheme.primary
+                                  : AppTheme.divider,
+                              width: 1.5),
+                        ),
+                        child: _agreedToPolicies
+                            ? const Icon(Icons.check_rounded,
+                                color: Colors.white, size: 14)
+                            : null,
+                      ),
+                      const SizedBox(width: 10),
+                      const Expanded(
+                        child: Text(
+                          'I have read and agree to the Laboratory Equipment Policies.',
+                          style: TextStyle(fontSize: 12, color: AppTheme.textDark),
+                        ),
+                      ),
+                    ]),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 20),
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
@@ -3609,7 +4123,192 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
   }
 }
 
+// ── Policy Reminder widget ─────────────────────────────────────────────────────
+class _PolicyReminder extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final String text;
+  const _PolicyReminder({required this.icon, required this.color, required this.text});
+  @override
+  Widget build(BuildContext context) {
+    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Icon(icon, color: color, size: 14),
+      const SizedBox(width: 6),
+      Expanded(child: Text(text,
+          style: const TextStyle(fontSize: 11, color: AppTheme.textMid, height: 1.4))),
+    ]);
+  }
+}
 
+
+
+// ─── Lab Policies Screen ──────────────────────────────────────────────────────
+
+class LabPoliciesScreen extends StatelessWidget {
+  const LabPoliciesScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    const policies = [
+      {
+        'title': 'Damaged or Missing Equipment Policy',
+        'icon': '⚠️',
+        'color': 0xFFEF4444,
+        'body':
+            'If a borrowed equipment is returned damaged or with missing parts, the student is required to replace the item with the same type or equivalent condition. The replacement does not need to be brand new, but it must be functional and acceptable to the staff.\n\nFailure to replace the damaged or missing equipment will result in the student\'s clearance not being signed or approved.',
+      },
+      {
+        'title': 'Late Return Policy',
+        'icon': '🕐',
+        'color': 0xFFFFB703,
+        'body':
+            'Students who fail to return borrowed equipment on the agreed return date and time will be considered late returnees.\n\nLate returnees may temporarily lose their borrowing privileges for a certain period determined by the laboratory staff.',
+      },
+      {
+        'title': 'Reservation Policy',
+        'icon': '📅',
+        'color': 0xFF1B3A8C,
+        'body':
+            'Equipment reservations are only allowed for the same day. Students must specify the exact borrowing time and expected return time during the reservation process.\n\nReservations are subject to equipment availability and staff approval.',
+      },
+      {
+        'title': 'Outside Campus Equipment Usage Policy',
+        'icon': '🏫',
+        'color': 0xFF7C3AED,
+        'body':
+            'If a student needs to use laboratory equipment outside the campus or university premises, they are required to submit a formal request or report explaining the purpose and reason for external usage.\n\nThe request must be reviewed and approved by the laboratory staff before the equipment can be released.',
+      },
+      {
+        'title': 'Inventory and Serial Number Policy',
+        'icon': '📋',
+        'color': 0xFF059669,
+        'body':
+            'All laboratory equipment must be recorded in the inventory system. Large equipment, tools, or high-value items are required to have a unique serial number for tracking purposes, while small equipment or minor tools may be recorded without a serial number.',
+      },
+    ];
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Laboratory Policies')),
+      body: Column(
+        children: [
+          // Header banner
+          Container(
+            width: double.infinity,
+            color: AppTheme.primary,
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+            child: Row(children: [
+              Container(
+                width: 48, height: 48,
+                decoration: BoxDecoration(
+                    color: const Color(0x1AFFFFFF),
+                    borderRadius: BorderRadius.circular(12)),
+                child: const Icon(Icons.policy_rounded,
+                    color: Colors.white, size: 26),
+              ),
+              const SizedBox(width: 14),
+              const Expanded(
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                  Text('CEA Laboratory Policies',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 15)),
+                  SizedBox(height: 2),
+                  Text(
+                      'Please read all policies carefully before borrowing equipment.',
+                      style:
+                          TextStyle(color: AppTheme.textLight, fontSize: 11)),
+                ]),
+              ),
+            ]),
+          ),
+
+          // Policy list
+          Expanded(
+            child: ListView.separated(
+              padding: const EdgeInsets.all(16),
+              itemCount: policies.length,
+              separatorBuilder: (_, __) => const SizedBox(height: 12),
+              itemBuilder: (_, i) {
+                final pol = policies[i];
+                final color = Color(pol['color'] as int);
+                return Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border(
+                        left: BorderSide(color: color, width: 4)),
+                    boxShadow: [
+                      BoxShadow(
+                          color: color.withAlpha(15),
+                          blurRadius: 8,
+                          offset: const Offset(0, 2))
+                    ],
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                      // Policy title row
+                      Row(children: [
+                        Container(
+                          width: 36, height: 36,
+                          decoration: BoxDecoration(
+                              color: color.withOpacity(0.10),
+                              borderRadius: BorderRadius.circular(10)),
+                          child: Center(
+                              child: Text(pol['icon'] as String,
+                                  style: const TextStyle(fontSize: 18))),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(pol['title'] as String,
+                              style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 13,
+                                  color: color)),
+                        ),
+                      ]),
+                      const SizedBox(height: 12),
+                      const Divider(color: AppTheme.divider, height: 1),
+                      const SizedBox(height: 12),
+                      // Policy body
+                      Text(pol['body'] as String,
+                          style: const TextStyle(
+                              fontSize: 13,
+                              color: AppTheme.textDark,
+                              height: 1.6)),
+                    ]),
+                  ),
+                );
+              },
+            ),
+          ),
+
+          // Bottom button
+          Container(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+            color: Colors.white,
+            child: SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: () => Navigator.pop(context),
+                icon: const Icon(Icons.check_rounded),
+                label: const Text('I Understand — Go Back'),
+                style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.primary,
+                    padding: const EdgeInsets.symmetric(vertical: 14)),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 // ─── QR Scan Screen (Admin — Return Processing) ───────────────────────────────
 
@@ -3771,7 +4470,7 @@ class _QRScanScreenState extends State<QRScanScreen> {
             Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                  color: AppTheme.success.withOpacity(0.08),
+                  color: const Color(0x1406D6A0),
                   borderRadius: BorderRadius.circular(12)),
               child: const Row(children: [
                 Icon(Icons.info_outline_rounded, color: AppTheme.success, size: 18),
@@ -3936,7 +4635,7 @@ class _ScanOverlayPainter extends CustomPainter {
       ..addRect(Rect.fromLTWH(0, 0, size.width, size.height))
       ..addRRect(rrect)
       ..fillType = PathFillType.evenOdd;
-    canvas.drawPath(path, Paint()..color = Colors.black.withOpacity(0.55));
+    canvas.drawPath(path, Paint()..color = const Color(0x8C000000));
 
     canvas.drawRRect(rrect, Paint()
       ..color = const Color(0xFFF5A623)
@@ -4075,7 +4774,7 @@ class _LiveBorrowList extends StatelessWidget {
                     Container(
                       width: 46, height: 46,
                       decoration: BoxDecoration(
-                          color: AppTheme.primary.withOpacity(0.08),
+                          color: const Color(0x141B3A8C),
                           borderRadius: BorderRadius.circular(12)),
                       child: const Icon(Icons.science_outlined, color: AppTheme.primary),
                     ),
@@ -4155,44 +4854,136 @@ class DamageReportScreen extends StatefulWidget {
 class _DamageReportScreenState extends State<DamageReportScreen> {
   String? _severity;
   String? _selectedEquipmentId;
+  String? _selectedEquipmentName;
   bool _loading = false;
+  bool _loadingEquipment = true;
   final _descCtrl = TextEditingController();
 
+  // Only equipment the student currently has borrowed (Approved status)
+  List<Map<String, dynamic>> _borrowedItems = [];
+
   @override
-  void dispose() { _descCtrl.dispose(); super.dispose(); }
+  void initState() {
+    super.initState();
+    _loadBorrowedEquipment();
+  }
+
+  @override
+  void dispose() {
+    _descCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadBorrowedEquipment() async {
+    setState(() => _loadingEquipment = true);
+    try {
+      if (Session.isDemoMode) {
+        // Demo borrowed items
+        setState(() {
+          _borrowedItems = [
+            {'equipment_id': '1', 'equipment_name': 'Digital Multimeter', 'qr_code': 'ELE-001'},
+            {'equipment_id': '2', 'equipment_name': 'Oscilloscope',       'qr_code': 'ELE-002'},
+          ];
+          _loadingEquipment = false;
+        });
+        return;
+      }
+      final loans = await ApiService.getMyBorrowings(
+        studentId: Session.currentUser?['student_id'],
+        studentNumber: Session.studentNumber,
+      );
+      // Only Approved (currently borrowed) items
+      final active = loans
+          .where((e) => e['status'] == 'Approved')
+          .map<Map<String, dynamic>>((e) => {
+                'equipment_id':   '${e['equipment_id'] ?? ''}',
+                'equipment_name': '${e['equipment_name'] ?? 'Unknown'}',
+                'qr_code':        '${e['qr_code'] ?? ''}',
+                'transaction_id': '${e['transaction_id'] ?? ''}',
+              })
+          .toList();
+
+      // Remove duplicates by equipment_id
+      final seen = <String>{};
+      final unique = active.where((e) => seen.add(e['equipment_id']!)).toList();
+
+      setState(() {
+        _borrowedItems = unique;
+        _loadingEquipment = false;
+      });
+    } catch (_) {
+      setState(() => _loadingEquipment = false);
+    }
+  }
 
   Future<void> _submit() async {
-    if (_descCtrl.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please describe the damage.'), backgroundColor: AppTheme.danger));
+    if (_selectedEquipmentId == null || _selectedEquipmentId!.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Please select the damaged equipment.'),
+          backgroundColor: AppTheme.danger,
+          behavior: SnackBarBehavior.floating));
       return;
     }
+    if (_severity == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Please select the damage severity.'),
+          backgroundColor: AppTheme.danger,
+          behavior: SnackBarBehavior.floating));
+      return;
+    }
+    if (_descCtrl.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Please describe the damage.'),
+          backgroundColor: AppTheme.danger,
+          behavior: SnackBarBehavior.floating));
+      return;
+    }
+
     setState(() => _loading = true);
     try {
       final res = await ApiService.submitDamageReport({
-        'equipment_id': int.tryParse(_selectedEquipmentId ?? '0') ?? 0,
-        'student_id':   Session.studentId,
-        'description':  '${_severity ?? 'Minor'}: ${_descCtrl.text.trim()}',
+        'equipment_id':   _selectedEquipmentId ?? '',
+        'equipment_name': _selectedEquipmentName ?? '',
+        'student_id':     Session.currentUser?['student_id']?.toString() ?? '',
+        'student_number': Session.studentNumber,
+        'borrower_name':  Session.name,
+        'severity':       _severity ?? 'Minor',
+        'description':    '${_severity ?? 'Minor'}: ${_descCtrl.text.trim()}',
       });
       if (!mounted) return;
       if (res['success'] == true) {
-        showDialog(context: context, barrierDismissible: false,
+        showDialog(
+          context: context,
+          barrierDismissible: false,
           builder: (_) => AlertDialog(
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
             icon: const Icon(Icons.check_circle_rounded, color: AppTheme.success, size: 52),
             title: const Text('Report Submitted'),
-            content: const Text('Your damage report has been submitted. Lab staff will review it shortly.', textAlign: TextAlign.center),
-            actions: [ElevatedButton(
-              onPressed: () { Navigator.pop(context); Navigator.pop(context); },
-              child: const Text('OK'))],
-          ));
+            content: const Text(
+                'Your damage report has been submitted. Lab staff will review it shortly.',
+                textAlign: TextAlign.center),
+            actions: [
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.pop(context); // close dialog
+                  Navigator.pop(context); // go back
+                },
+                child: const Text('OK'),
+              )
+            ],
+          ),
+        );
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(res['message'] ?? 'Failed.'), backgroundColor: AppTheme.danger));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(res['message'] ?? 'Submission failed.'),
+            backgroundColor: AppTheme.danger,
+            behavior: SnackBarBehavior.floating));
       }
-    } catch (_) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Cannot connect to server.'), backgroundColor: AppTheme.danger));
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Error: ${e.toString()}'),
+          backgroundColor: AppTheme.danger,
+          behavior: SnackBarBehavior.floating));
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -4207,134 +4998,211 @@ class _DamageReportScreenState extends State<DamageReportScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Warning banner
             Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                  color: AppTheme.danger.withOpacity(0.08),
-                  borderRadius: BorderRadius.circular(16),
-                  border:
-                      Border.all(color: AppTheme.danger.withOpacity(0.2))),
-              child: Row(
-                children: [
-                  const Icon(Icons.warning_amber_rounded,
-                      color: AppTheme.danger),
-                  const SizedBox(width: 10),
-                  const Expanded(
-                    child: Text(
-                        'Please report any damage to equipment immediately. This helps us maintain quality for all students.',
-                        style: TextStyle(
-                            fontSize: 13, color: AppTheme.textDark)),
+                  color: const Color(0x14EF4444),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: const Color(0x40EF4444))),
+              child: const Row(children: [
+                Icon(Icons.warning_amber_rounded, color: AppTheme.danger),
+                SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Report any damage immediately. Unreported damage may result in clearance issues.',
+                    style: TextStyle(fontSize: 13, color: AppTheme.textDark),
                   ),
-                ],
-              ),
+                ),
+              ]),
             ),
             const SizedBox(height: 20),
-            _FieldLabel('Equipment'),
+
+            // Equipment selector — live from borrowed items
+            _FieldLabel('Equipment (Your Active Loans)'),
             const SizedBox(height: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-              decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: AppTheme.divider)),
-              child: DropdownButtonHideUnderline(
-                child: DropdownButton<String>(
-                  isExpanded: true,
-                  hint: const Text('Select equipment',
-                      style: TextStyle(color: AppTheme.textLight)),
-                  items: ['Digital Multimeter (EQ-0042)', 'Oscilloscope (EQ-0018)']
-                      .map((e) =>
-                          DropdownMenuItem(value: e, child: Text(e)))
-                      .toList(),
-                  onChanged: (_) {},
+            _loadingEquipment
+                ? Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: AppTheme.divider)),
+                    child: const Row(children: [
+                      SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2)),
+                      SizedBox(width: 12),
+                      Text('Loading your borrowed equipment...',
+                          style: TextStyle(color: AppTheme.textMid, fontSize: 13)),
+                    ]),
+                  )
+                : _borrowedItems.isEmpty
+                    ? Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: AppTheme.divider)),
+                        child: const Row(children: [
+                          Icon(Icons.inventory_2_outlined,
+                              color: AppTheme.textLight, size: 20),
+                          SizedBox(width: 10),
+                          Text('No active loans found.',
+                              style: TextStyle(
+                                  color: AppTheme.textMid, fontSize: 13)),
+                        ]),
+                      )
+                    : Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 4),
+                        decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                                color: _selectedEquipmentId != null
+                                    ? AppTheme.primary
+                                    : AppTheme.divider)),
+                        child: DropdownButtonHideUnderline(
+                          child: DropdownButton<String>(
+                            isExpanded: true,
+                            value: _selectedEquipmentId,
+                            hint: const Text(
+                                'Select borrowed equipment to report',
+                                style: TextStyle(
+                                    color: AppTheme.textLight, fontSize: 13)),
+                            items: _borrowedItems.map((e) {
+                              return DropdownMenuItem<String>(
+                                value: e['equipment_id'],
+                                child: Row(children: [
+                                  const Icon(Icons.science_outlined,
+                                      size: 16, color: AppTheme.primary),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Text(e['equipment_name']!,
+                                            style: const TextStyle(
+                                                fontSize: 13,
+                                                fontWeight: FontWeight.w600,
+                                                color: AppTheme.textDark)),
+                                        Text(e['qr_code']!,
+                                            style: const TextStyle(
+                                                fontSize: 11,
+                                                color: AppTheme.textMid)),
+                                      ],
+                                    ),
+                                  ),
+                                ]),
+                              );
+                            }).toList(),
+                            onChanged: (val) {
+                              final item = _borrowedItems
+                                  .firstWhere((e) => e['equipment_id'] == val);
+                              setState(() {
+                                _selectedEquipmentId   = val;
+                                _selectedEquipmentName = item['equipment_name'];
+                              });
+                            },
+                          ),
+                        ),
+                      ),
+
+            // Total borrowed count info
+            if (!_loadingEquipment && _borrowedItems.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  'You currently have ${_borrowedItems.length} item(s) borrowed.',
+                  style: const TextStyle(
+                      fontSize: 11, color: AppTheme.textMid),
                 ),
               ),
-            ),
-            const SizedBox(height: 16),
-            _FieldLabel('Severity'),
-            const SizedBox(height: 8),
+            const SizedBox(height: 20),
+
+            // Severity selector
+            _FieldLabel('Damage Severity'),
+            const SizedBox(height: 10),
             Row(
               children: ['Minor', 'Moderate', 'Severe'].map((s) {
                 final colors = {
-                  'Minor': AppTheme.success,
+                  'Minor':    AppTheme.success,
                   'Moderate': AppTheme.warning,
-                  'Severe': AppTheme.danger
+                  'Severe':   AppTheme.danger,
                 };
                 final c = colors[s]!;
+                final selected = _severity == s;
                 return Expanded(
                   child: GestureDetector(
                     onTap: () => setState(() => _severity = s),
                     child: Container(
                       margin: const EdgeInsets.only(right: 8),
-                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
                       decoration: BoxDecoration(
-                        color: _severity == s
-                            ? c.withOpacity(0.15)
-                            : Colors.white,
+                        color: selected ? c.withOpacity(0.12) : Colors.white,
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(
-                            color: _severity == s ? c : AppTheme.divider,
-                            width: _severity == s ? 2 : 1),
+                            color: selected ? c : AppTheme.divider,
+                            width: selected ? 2 : 1),
                       ),
-                      child: Center(
-                          child: Text(s,
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            s == 'Minor'    ? Icons.info_outline_rounded :
+                            s == 'Moderate' ? Icons.warning_amber_rounded :
+                                              Icons.report_rounded,
+                            color: selected ? c : AppTheme.textLight,
+                            size: 20,
+                          ),
+                          const SizedBox(height: 4),
+                          Text(s,
                               style: TextStyle(
-                                  color: _severity == s ? c : AppTheme.textMid,
+                                  color: selected ? c : AppTheme.textMid,
                                   fontWeight: FontWeight.bold,
-                                  fontSize: 13))),
+                                  fontSize: 12)),
+                        ],
+                      ),
                     ),
                   ),
                 );
               }).toList(),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 20),
+
+            // Description
             _FieldLabel('Description of Damage'),
             const SizedBox(height: 8),
             TextField(
+              controller: _descCtrl,
               maxLines: 4,
               decoration: const InputDecoration(
-                  hintText: 'Describe the damage in detail...'),
-            ),
-            const SizedBox(height: 16),
-            _FieldLabel('Photo Evidence (Optional)'),
-            const SizedBox(height: 8),
-            GestureDetector(
-              onTap: () {},
-              child: Container(
-                height: 100,
-                decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                        color: AppTheme.divider, style: BorderStyle.solid)),
-                child: const Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.add_photo_alternate_outlined,
-                          color: AppTheme.textLight, size: 32),
-                      SizedBox(height: 6),
-                      Text('Tap to add photos',
-                          style: TextStyle(
-                              color: AppTheme.textLight, fontSize: 13)),
-                    ],
-                  ),
-                ),
-              ),
+                  hintText: 'Describe the damage in detail. Be specific about what is broken, missing, or not working...'),
             ),
             const SizedBox(height: 28),
+
+            // Submit button
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
                 onPressed: _loading ? null : _submit,
                 icon: _loading
-                    ? const SizedBox(width: 16, height: 16,
-                        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                    ? const SizedBox(
+                        width: 16, height: 16,
+                        child: CircularProgressIndicator(
+                            color: Colors.white, strokeWidth: 2))
                     : const Icon(Icons.send_rounded),
-                label: const Text('Submit Report'),
-                style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+                label: Text(_loading ? 'Submitting...' : 'Submit Report'),
+                style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.danger,
+                    padding: const EdgeInsets.symmetric(vertical: 14)),
               ),
             ),
+            const SizedBox(height: 20),
           ],
         ),
       ),
@@ -4391,7 +5259,7 @@ class ProfileScreen extends StatelessWidget {
                   children: [
                     CircleAvatar(
                       radius: 40,
-                      backgroundColor: AppTheme.accent.withOpacity(0.2),
+                      backgroundColor: const Color(0x33F5A623),
                       child: Text(Session.initials,
                           style: const TextStyle(
                               color: AppTheme.accent,
@@ -4458,6 +5326,12 @@ class ProfileScreen extends StatelessWidget {
                   // ── Support ──
                   const SectionHeader(title: 'Support'),
                   const SizedBox(height: 12),
+                  _SettingTile(
+                    icon: Icons.policy_rounded,
+                    label: 'Laboratory Policies',
+                    onTap: () => Navigator.push(context,
+                        MaterialPageRoute(builder: (_) => const LabPoliciesScreen())),
+                  ),
                   _SettingTile(
                     icon: Icons.help_outline_rounded,
                     label: 'Help & FAQ',
@@ -4599,7 +5473,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                 children: [
                   CircleAvatar(
                     radius: 48,
-                    backgroundColor: AppTheme.accent.withOpacity(0.15),
+                    backgroundColor: const Color(0x26F5A623),
                     child: Text(Session.initials,
                         style: const TextStyle(
                             color: AppTheme.accent,
@@ -4800,9 +5674,9 @@ class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
             Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                  color: AppTheme.primary.withOpacity(0.07),
+                  color: const Color(0x121B3A8C),
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: AppTheme.primary.withOpacity(0.15))),
+                  border: Border.all(color: const Color(0x261B3A8C))),
               child: const Row(children: [
                 Icon(Icons.shield_outlined, color: AppTheme.primary, size: 20),
                 SizedBox(width: 10),
@@ -5041,7 +5915,7 @@ class _HelpFaqScreenState extends State<HelpFaqScreen> {
               Container(
                 width: 48, height: 48,
                 decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.15),
+                    color: const Color(0x26FFFFFF),
                     borderRadius: BorderRadius.circular(14)),
                 child: const Icon(Icons.help_outline_rounded, color: Colors.white, size: 26),
               ),
@@ -5072,9 +5946,9 @@ class _HelpFaqScreenState extends State<HelpFaqScreen> {
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(14),
                       border: Border.all(
-                          color: isOpen ? AppTheme.primary.withOpacity(0.3) : AppTheme.divider),
+                          color: isOpen ? const Color(0x4D1B3A8C) : AppTheme.divider),
                       boxShadow: isOpen ? [
-                        BoxShadow(color: AppTheme.primary.withOpacity(0.08),
+                        BoxShadow(color: const Color(0x141B3A8C),
                             blurRadius: 8, offset: const Offset(0, 2))
                       ] : [],
                     ),
@@ -5250,7 +6124,7 @@ class _AboutTile extends StatelessWidget {
         Container(
           width: 36, height: 36,
           decoration: BoxDecoration(
-              color: AppTheme.primary.withOpacity(0.08),
+              color: const Color(0x141B3A8C),
               borderRadius: BorderRadius.circular(10)),
           child: Icon(icon, color: AppTheme.primary, size: 18),
         ),
@@ -5551,7 +6425,7 @@ class _AdminHomeState extends State<_AdminHome> {
                         right: -24, top: -10,
                         child: Icon(Icons.inventory_2_rounded,
                             size: 180,
-                            color: Colors.white.withOpacity(0.04)),
+                            color: const Color(0x0AFFFFFF)),
                       ),
                       Padding(
                         padding: const EdgeInsets.fromLTRB(24, 52, 24, 20),
@@ -5565,7 +6439,7 @@ class _AdminHomeState extends State<_AdminHome> {
                                 Container(
                                   width: 36, height: 36,
                                   decoration: BoxDecoration(
-                                      color: AppTheme.accent.withOpacity(0.2),
+                                      color: const Color(0x33F5A623),
                                       borderRadius: BorderRadius.circular(10)),
                                   child: const Icon(Icons.science_rounded,
                                       color: AppTheme.accent, size: 20),
@@ -5592,7 +6466,7 @@ class _AdminHomeState extends State<_AdminHome> {
                                   padding: const EdgeInsets.symmetric(
                                       horizontal: 10, vertical: 4),
                                   decoration: BoxDecoration(
-                                      color: AppTheme.accent.withOpacity(0.2),
+                                      color: const Color(0x33F5A623),
                                       borderRadius: BorderRadius.circular(8)),
                                   child: const Text('ADMIN',
                                       style: TextStyle(
@@ -5643,58 +6517,6 @@ class _AdminHomeState extends State<_AdminHome> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
 
-                      // ── System Identity Banner ──
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(14),
-                        margin: const EdgeInsets.only(bottom: 20),
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                            colors: [
-                              AppTheme.primary.withOpacity(0.07),
-                              AppTheme.accent.withOpacity(0.05),
-                            ],
-                          ),
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(
-                              color: AppTheme.primary.withOpacity(0.15)),
-                        ),
-                        child: Row(children: [
-                          Container(
-                            width: 40, height: 40,
-                            decoration: BoxDecoration(
-                                color: AppTheme.primary.withOpacity(0.1),
-                                borderRadius: BorderRadius.circular(10)),
-                            child: const Icon(Icons.science_rounded,
-                                color: AppTheme.primary, size: 22),
-                          ),
-                          const SizedBox(width: 12),
-                          const Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'Mobile Equipment Borrowing\n& Return Monitoring System',
-                                  style: TextStyle(
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.bold,
-                                      color: AppTheme.primary,
-                                      height: 1.3),
-                                ),
-                                SizedBox(height: 2),
-                                Text(
-                                  'School Laboratories · CEA · New Era University',
-                                  style: TextStyle(
-                                      fontSize: 11,
-                                      color: AppTheme.textMid),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ]),
-                      ),
 
                       // ── Live Stats ──
                       IntrinsicHeight(
@@ -5779,12 +6601,12 @@ class _AdminHomeState extends State<_AdminHome> {
                               decoration: BoxDecoration(
                                   color: Colors.white,
                                   borderRadius: BorderRadius.circular(16),
-                                  border: Border.all(color: AppTheme.accent.withOpacity(0.2))),
+                                  border: Border.all(color: const Color(0x33F5A623))),
                               child: Column(children: [
                                 Row(children: [
                                   CircleAvatar(
                                     radius: 18,
-                                    backgroundColor: AppTheme.accent.withOpacity(0.1),
+                                    backgroundColor: const Color(0x1AF5A623),
                                     child: Text(name.isNotEmpty ? name[0].toUpperCase() : '?',
                                         style: const TextStyle(color: AppTheme.accent,
                                             fontWeight: FontWeight.bold)),
@@ -5857,13 +6679,13 @@ class _AdminHomeState extends State<_AdminHome> {
                               decoration: BoxDecoration(
                                   color: Colors.white,
                                   borderRadius: BorderRadius.circular(16),
-                                  border: Border.all(color: AppTheme.success.withOpacity(0.2))),
+                                  border: Border.all(color: const Color(0x3306D6A0))),
                               child: Column(children: [
                                 Row(children: [
                                   Container(
                                     width: 40, height: 40,
                                     decoration: BoxDecoration(
-                                        color: AppTheme.success.withOpacity(0.1),
+                                        color: const Color(0x1A06D6A0),
                                         borderRadius: BorderRadius.circular(10)),
                                     child: const Icon(Icons.science_outlined,
                                         color: AppTheme.success, size: 20),
@@ -5927,7 +6749,7 @@ class _AdminStatCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-              color: color.withOpacity(0.1),
+              color: color.withAlpha(26),
               blurRadius: 10,
               offset: const Offset(0, 4))
         ],
@@ -5940,7 +6762,7 @@ class _AdminStatCard extends StatelessWidget {
             width: 36,
             height: 36,
             decoration: BoxDecoration(
-                color: color.withOpacity(0.12),
+                color: color.withAlpha(31),
                 borderRadius: BorderRadius.circular(10)),
             child: Icon(icon, color: color, size: 18),
           ),
@@ -5982,7 +6804,7 @@ class _AdminRequestCard extends StatelessWidget {
             children: [
               CircleAvatar(
                 radius: 18,
-                backgroundColor: AppTheme.accent.withOpacity(0.1),
+                backgroundColor: const Color(0x1AF5A623),
                 child: Text(student[0],
                     style: const TextStyle(
                         color: AppTheme.accent,
@@ -6053,9 +6875,9 @@ class _OverdueCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: AppTheme.danger.withOpacity(0.06),
+        color: const Color(0x0FEF4444),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppTheme.danger.withOpacity(0.2)),
+        border: Border.all(color: const Color(0x33EF4444)),
       ),
       child: Row(
         children: [
@@ -6102,7 +6924,7 @@ class _AdminRequestsScreenState extends State<AdminRequestsScreen> {
   List<dynamic> _all = [];
 
   @override
-  void initState() { super.initState(); _load(); }
+  void initState() { super.initState(); WidgetsBinding.instance.addPostFrameCallback((_) => _load()); }
 
   Future<void> _load() async {
     setState(() => _loading = true);
@@ -6246,7 +7068,7 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
   final _categories = ['All', 'Electronics', 'Optics', 'Measurement', 'Tools', 'Microcontroller'];
 
   @override
-  void initState() { super.initState(); _load(); }
+  void initState() { super.initState(); WidgetsBinding.instance.addPostFrameCallback((_) => _load()); }
 
   Future<void> _load() async {
     setState(() { _loading = true; _hasError = false; });
@@ -6342,7 +7164,7 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
                     hintStyle: const TextStyle(color: AppTheme.textLight),
                     prefixIcon: const Icon(Icons.search_rounded, color: AppTheme.textLight),
                     filled: true,
-                    fillColor: Colors.white.withOpacity(0.1),
+                    fillColor: const Color(0x1AFFFFFF),
                     border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
                     enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
                     focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppTheme.accent, width: 1.5)),
@@ -6366,7 +7188,7 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
                           duration: const Duration(milliseconds: 160),
                           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
                           decoration: BoxDecoration(
-                            color: sel ? AppTheme.accent : Colors.white.withOpacity(0.1),
+                            color: sel ? AppTheme.accent : const Color(0x1AFFFFFF),
                             borderRadius: BorderRadius.circular(20),
                           ),
                           child: Text(c,
@@ -6518,7 +7340,7 @@ class _InvStat extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
         decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.1),
+          color: const Color(0x1AFFFFFF),
           borderRadius: BorderRadius.circular(12),
         ),
         child: Row(
@@ -6589,7 +7411,7 @@ class EquipmentDetailScreen extends StatelessWidget {
                     width: 64,
                     height: 64,
                     decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.12),
+                      color: const Color(0x1FFFFFFF),
                       borderRadius: BorderRadius.circular(18),
                     ),
                     child: const Icon(Icons.science_outlined, color: Colors.white, size: 34),
@@ -7097,9 +7919,9 @@ class _EquipmentRegistrationScreenState
                 Container(
                   padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
-                    color: AppTheme.primary.withOpacity(0.06),
+                    color: const Color(0x0F1B3A8C),
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: AppTheme.primary.withOpacity(0.15)),
+                    border: Border.all(color: const Color(0x261B3A8C)),
                   ),
                   child: const Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -7145,7 +7967,7 @@ class _EquipmentRegistrationScreenState
                       Container(
                         width: 52, height: 52,
                         decoration: BoxDecoration(
-                          color: AppTheme.success.withOpacity(0.2),
+                          color: const Color(0x3306D6A0),
                           shape: BoxShape.circle,
                         ),
                         child: const Icon(Icons.check_rounded, color: AppTheme.success, size: 28),
@@ -7161,7 +7983,7 @@ class _EquipmentRegistrationScreenState
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                         decoration: BoxDecoration(
-                          color: AppTheme.accent.withOpacity(0.15),
+                          color: const Color(0x26F5A623),
                           borderRadius: BorderRadius.circular(10),
                         ),
                         child: Text(_generatedId,
@@ -7185,7 +8007,7 @@ class _EquipmentRegistrationScreenState
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(20),
-                    boxShadow: [BoxShadow(color: AppTheme.primary.withOpacity(0.08), blurRadius: 12, offset: const Offset(0, 4))],
+                    boxShadow: [BoxShadow(color: const Color(0x141B3A8C), blurRadius: 12, offset: const Offset(0, 4))],
                   ),
                   child: Column(
                     children: [
@@ -7832,7 +8654,7 @@ class _ReportCard extends StatelessWidget {
               width: 40,
               height: 40,
               decoration: BoxDecoration(
-                  color: color.withOpacity(0.12),
+                  color: color.withAlpha(31),
                   borderRadius: BorderRadius.circular(10)),
               child: Icon(icon, color: color, size: 20),
             ),
