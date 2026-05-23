@@ -1,9 +1,13 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_storage/firebase_storage.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import 'firebase_options.dart';
 
 // ─── Firebase Service ─────────────────────────────────────────────────────────
@@ -28,29 +32,47 @@ class ApiService {
         final studentData = snap.docs.first.data();
         final email = studentData['email'] as String;
         await _auth.signInWithEmailAndPassword(email: email, password: password);
+        if (_auth.currentUser?.emailVerified != true) {
+          await _auth.signOut();
+          return {'success': false, 'message': 'email_not_verified', 'email': email};
+        }
         final user = {...studentData, 'student_id': snap.docs.first.id};
         return {'success': true, 'role': 'student', 'user': user};
       } else {
         // Staff login with email
         await _auth.signInWithEmailAndPassword(
             email: identifier, password: password);
-        final uid  = _auth.currentUser!.uid;
+        final uid = _auth.currentUser!.uid;
+
+        // Fetch Firestore doc first so we can check role before email check
         final snap = await _db.collection('staff').doc(uid).get();
+        Map<String, dynamic> staffData;
+        String staffDocId;
         if (!snap.exists) {
-          // Check by email if doc not found by uid
           final q = await _db
               .collection('staff')
               .where('email', isEqualTo: identifier)
               .limit(1)
               .get();
           if (q.docs.isEmpty) {
+            await _auth.signOut();
             return {'success': false, 'message': 'Staff account not found.'};
           }
-          final data = {...q.docs.first.data(), 'staff_id': q.docs.first.id};
-          return {'success': true, 'role': 'staff', 'user': data};
+          staffData  = Map<String, dynamic>.from(q.docs.first.data());
+          staffDocId = q.docs.first.id;
+        } else {
+          staffData  = Map<String, dynamic>.from(snap.data()!);
+          staffDocId = uid;
         }
-        final data = {...snap.data()!, 'staff_id': uid};
-        return {'success': true, 'role': 'staff', 'user': data};
+
+        // Admin accounts skip email verification
+        if (staffData['role'] != 'admin' &&
+            _auth.currentUser?.emailVerified != true) {
+          await _auth.signOut();
+          return {'success': false, 'message': 'email_not_verified', 'email': identifier};
+        }
+
+        return {'success': true, 'role': 'staff', 'user': {...staffData, 'staff_id': staffDocId}};
       }
     } on FirebaseAuthException catch (e) {
       String msg = 'Login failed.';
@@ -87,6 +109,9 @@ class ApiService {
       }
 
       final uid = cred.user!.uid;
+
+      // Send verification email before Firestore write
+      await cred.user!.sendEmailVerification();
 
       // Step 2: Now authenticated — check student_number uniqueness
       try {
@@ -141,6 +166,8 @@ class ApiService {
 
     final uid = cred.user!.uid;
 
+    await cred.user!.sendEmailVerification();
+
     // Step 2: Save staff profile using UID as document ID
     await _db.collection('staff').doc(uid).set({
       'name':       name,
@@ -160,22 +187,28 @@ class ApiService {
     return {'success': false, 'message': e.toString()};
   }
 }
+  static Future<Map<String, dynamic>> resendVerificationEmail(
+      String email, String password) async {
+    try {
+      final cred = await _auth.signInWithEmailAndPassword(
+          email: email, password: password);
+      if (cred.user?.emailVerified == true) {
+        await _auth.signOut();
+        return {'success': false, 'message': 'Your email is already verified. Try signing in again.'};
+      }
+      await cred.user!.sendEmailVerification();
+      await _auth.signOut();
+      return {'success': true};
+    } on FirebaseAuthException catch (e) {
+      return {'success': false, 'message': e.message ?? 'Failed to resend verification email.'};
+    } catch (e) {
+      return {'success': false, 'message': e.toString()};
+    }
+  }
+
   // ── Equipment ─────────────────────────────────────────────────────────────
   static Future<List<dynamic>> getEquipment(
       {String search = '', String category = ''}) async {
-    if (Session.isDemoMode) {
-      await Future.delayed(const Duration(milliseconds: 400));
-      var data = Session.demoEquipment;
-      if (search.isNotEmpty)
-        data = data
-            .where((e) => (e['equipment_name'] as String)
-                .toLowerCase()
-                .contains(search.toLowerCase()))
-            .toList();
-      if (category.isNotEmpty)
-        data = data.where((e) => e['category'] == category).toList();
-      return data;
-    }
     Query q = _db.collection('equipment').orderBy('equipment_name');
     final snap = await q.get();
     List<dynamic> items = snap.docs.map((d) {
@@ -194,14 +227,6 @@ class ApiService {
   }
 
   static Future<Map<String, dynamic>> getEquipmentByQr(String qrCode) async {
-    if (Session.isDemoMode) {
-      await Future.delayed(const Duration(milliseconds: 300));
-      final match =
-          Session.demoEquipment.where((e) => e['qr_code'] == qrCode).toList();
-      if (match.isEmpty)
-        return {'success': false, 'message': 'Equipment not found.'};
-      return {'success': true, 'data': match.first};
-    }
     final snap = await _db
         .collection('equipment')
         .where('qr_code', isEqualTo: qrCode)
@@ -210,7 +235,7 @@ class ApiService {
     if (snap.docs.isEmpty)
       return {'success': false, 'message': 'Equipment not found.'};
     final data = {
-      ...snap.docs.first.data() as Map<String, dynamic>,
+      ...snap.docs.first.data(),
       'equipment_id': snap.docs.first.id
     };
     return {'success': true, 'data': data};
@@ -232,6 +257,12 @@ class ApiService {
         'location':       location,
         'qr_code':        qrCode,
         'status':         'Available',
+        'courses':        (data['courses'] as List?)?.cast<String>() ?? [],
+        'description':    data['description'] ?? '',
+        'brand':          data['brand'] ?? '',
+        'model':          data['model'] ?? '',
+        'serial_number':  data['serial_number'] ?? '',
+        'image_url':      data['image_url'] ?? '',
         'created_at':     FieldValue.serverTimestamp(),
       });
       return {
@@ -245,17 +276,32 @@ class ApiService {
     }
   }
 
+  static Future<Map<String, dynamic>> updateEquipment(
+      String equipmentId, Map<String, dynamic> data) async {
+    try {
+      await _db.collection('equipment').doc(equipmentId).update(data);
+      return {'success': true};
+    } catch (e) {
+      return {'success': false, 'message': e.toString()};
+    }
+  }
+
+  static Future<String?> uploadEquipmentImage(
+      String equipmentId, Uint8List bytes) async {
+    try {
+      final ref = FirebaseStorage.instance
+          .ref()
+          .child('equipment_images/$equipmentId.jpg');
+      await ref.putData(bytes, SettableMetadata(contentType: 'image/jpeg'));
+      return await ref.getDownloadURL();
+    } catch (_) {
+      return null;
+    }
+  }
+
   // ── Borrow / Return ───────────────────────────────────────────────────────
   static Future<Map<String, dynamic>> borrowEquipment(
       Map<String, dynamic> data) async {
-    if (Session.isDemoMode) {
-      await Future.delayed(const Duration(milliseconds: 500));
-      return {
-        'success': true,
-        'message': 'Demo: Borrow request submitted!',
-        'transaction_id': 'demo-99'
-      };
-    }
     try {
       final equipId = data['equipment_id'].toString();
       // Check equipment is Available
@@ -298,10 +344,6 @@ class ApiService {
 
   static Future<Map<String, dynamic>> returnEquipment(
       dynamic transactionId, String condition) async {
-    if (Session.isDemoMode) {
-      await Future.delayed(const Duration(milliseconds: 400));
-      return {'success': true, 'message': 'Demo: Equipment returned!'};
-    }
     try {
       final txDoc =
           await _db.collection('borrow_transactions').doc('$transactionId').get();
@@ -329,10 +371,6 @@ class ApiService {
   // ── Transactions ──────────────────────────────────────────────────────────
   static Future<List<dynamic>> getMyBorrowings(
       {dynamic studentId = 0, String studentNumber = ''}) async {
-    if (Session.isDemoMode) {
-      await Future.delayed(const Duration(milliseconds: 400));
-      return Session.demoBorrowings;
-    }
     final sid = Session.currentUser?['student_id']?.toString() ?? '';
     if (sid.isEmpty) return [];
 
@@ -370,13 +408,6 @@ class ApiService {
   }
 
   static Future<List<dynamic>> getRequests({String status = ''}) async {
-    if (Session.isDemoMode) {
-      await Future.delayed(const Duration(milliseconds: 400));
-      if (status.isEmpty || status == 'All') return Session.demoRequests;
-      return Session.demoRequests
-          .where((e) => e['status'] == status)
-          .toList();
-    }
     // Query without orderBy to avoid composite index requirement
     Query q = _db.collection('borrow_transactions');
     if (status.isNotEmpty && status != 'All') {
@@ -410,10 +441,6 @@ class ApiService {
 
   static Future<Map<String, dynamic>> updateRequestStatus(
       dynamic transactionId, String action) async {
-    if (Session.isDemoMode) {
-      await Future.delayed(const Duration(milliseconds: 400));
-      return {'success': true, 'message': 'Demo: Status updated!'};
-    }
     try {
       final txDoc =
           await _db.collection('borrow_transactions').doc('$transactionId').get();
@@ -441,45 +468,6 @@ class ApiService {
       }
     } catch (e) {
       return {'success': false, 'message': e.toString()};
-    }
-  }
-
-  // ── Dashboard Stats ───────────────────────────────────────────────────────
-  static Future<Map<String, dynamic>> getDashboardStats() async {
-    if (Session.isDemoMode) {
-      await Future.delayed(const Duration(milliseconds: 300));
-      return {
-        'pending_requests':    2,
-        'active_loans':        2,
-        'overdue_loans':       0,
-        'total_equipment':     9,
-        'available_equipment': 7,
-        'damage_reports':      1,
-      };
-    }
-    try {
-      final eqSnap  = await _db.collection('equipment').get();
-      final txSnap  = await _db.collection('borrow_transactions').get();
-      final total   = eqSnap.docs.length;
-      final avail   = eqSnap.docs.where((d) => d['status'] == 'Available').length;
-      final pending = txSnap.docs.where((d) => d['status'] == 'Pending').length;
-      final active  = txSnap.docs.where((d) => d['status'] == 'Approved').length;
-      final now     = DateTime.now();
-      final overdue = txSnap.docs.where((d) {
-        if (d['status'] != 'Approved') return false;
-        final due = (d['due_date'] as Timestamp?)?.toDate();
-        return due != null && due.isBefore(now);
-      }).length;
-      return {
-        'pending_requests':    pending,
-        'active_loans':        active,
-        'overdue_loans':       overdue,
-        'total_equipment':     total,
-        'available_equipment': avail,
-        'damage_reports':      0,
-      };
-    } catch (e) {
-      return {};
     }
   }
 
@@ -522,58 +510,31 @@ class ApiService {
 }
 
 // ─── Session (simple in-memory user state) ───────────────────────────────────
+const _kCourses = ['CE', 'ME', 'ECE', 'EE', 'Arch', 'EnSci', 'IE', 'Astronomy'];
+
 class Session {
   static Map<String, dynamic>? currentUser;
   static String? role; // 'student' or 'staff'
-  static bool isDemoMode = false;
 
-  static void set(Map<String, dynamic> user, String r, {bool demo = false}) {
+  static void set(Map<String, dynamic> user, String r) {
     currentUser = user;
     role = r;
-    isDemoMode = demo;
   }
 
   static void clear() {
     currentUser = null;
     role = null;
-    isDemoMode = false;
   }
 
   static String get name => currentUser?['name'] ?? 'User';
   static String get studentNumber => currentUser?['student_number'] ?? '';
   static int get studentId => int.tryParse('${currentUser?['student_id'] ?? 0}') ?? 0;
+  static String get course => currentUser?['course'] ?? '';
   static String get initials {
     final parts = name.trim().split(' ');
     if (parts.length >= 2) return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
     return name.isNotEmpty ? name[0].toUpperCase() : 'U';
   }
-
-  // ── Sample data shown when in demo mode ──────────────────────────────────
-  static final List<Map<String, dynamic>> demoEquipment = [
-    {'equipment_id': '1', 'equipment_name': 'Digital Multimeter',  'category': 'Electronics',     'qr_code': 'ELE-001', 'status': 'Available',  'location': 'Cabinet A'},
-    {'equipment_id': '2', 'equipment_name': 'Oscilloscope',         'category': 'Electronics',     'qr_code': 'ELE-002', 'status': 'Borrowed',   'location': 'Cabinet A'},
-    {'equipment_id': '3', 'equipment_name': 'Breadboard Kit',       'category': 'Electronics',     'qr_code': 'ELE-003', 'status': 'Available',  'location': 'Cabinet B'},
-    {'equipment_id': '4', 'equipment_name': 'Soldering Iron Kit',   'category': 'Tools',           'qr_code': 'TOO-001', 'status': 'Available',  'location': 'Cabinet C'},
-    {'equipment_id': '5', 'equipment_name': 'Vernier Caliper',      'category': 'Measurement',     'qr_code': 'MEA-001', 'status': 'Available',  'location': 'Cabinet D'},
-    {'equipment_id': '6', 'equipment_name': 'Micrometer',           'category': 'Measurement',     'qr_code': 'MEA-002', 'status': 'Available',  'location': 'Cabinet D'},
-    {'equipment_id': '7', 'equipment_name': 'Optical Lens Set',     'category': 'Optics',          'qr_code': 'OPT-001', 'status': 'Borrowed',   'location': 'Cabinet E'},
-    {'equipment_id': '8', 'equipment_name': 'Power Supply Unit',    'category': 'Electronics',     'qr_code': 'ELE-004', 'status': 'Available',  'location': 'Cabinet A'},
-    {'equipment_id': '9', 'equipment_name': 'Arduino Kit',          'category': 'Microcontroller', 'qr_code': 'MIC-001', 'status': 'Available',  'location': 'Cabinet B'},
-  ];
-
-  static final List<Map<String, dynamic>> demoBorrowings = [
-    {'transaction_id': '1', 'equipment_name': 'Digital Multimeter', 'qr_code': 'ELE-001', 'status': 'Approved',  'due_date': '2026-04-01', 'student_number': '26-10001-001', 'borrower_name': 'Demo Student', 'quantity': 1},
-    {'transaction_id': '2', 'equipment_name': 'Breadboard Kit',     'qr_code': 'ELE-003', 'status': 'Pending',   'due_date': '2026-04-05', 'student_number': '26-10001-001', 'borrower_name': 'Demo Student', 'quantity': 2},
-    {'transaction_id': '3', 'equipment_name': 'Vernier Caliper',    'qr_code': 'MEA-001', 'status': 'Returned',  'due_date': '2026-03-20', 'student_number': '26-10001-001', 'borrower_name': 'Demo Student', 'quantity': 1},
-  ];
-
-  static final List<Map<String, dynamic>> demoRequests = [
-    {'transaction_id': '1', 'equipment_name': 'Digital Multimeter', 'qr_code': 'ELE-001', 'status': 'Pending',  'due_date': '2026-04-01T00:00:00', 'student_number': '26-12345-123', 'borrower_name': 'Juan Santos',  'quantity': 1},
-    {'transaction_id': '2', 'equipment_name': 'Oscilloscope',        'qr_code': 'ELE-002', 'status': 'Pending',  'due_date': '2026-04-03T00:00:00', 'student_number': '26-12345-145', 'borrower_name': 'Ana Reyes',    'quantity': 1},
-    {'transaction_id': '3', 'equipment_name': 'Breadboard Kit',      'qr_code': 'ELE-003', 'status': 'Approved', 'due_date': '2026-04-05T00:00:00', 'student_number': '26-12345-167', 'borrower_name': 'Leo Cruz',     'quantity': 2},
-    {'transaction_id': '4', 'equipment_name': 'Soldering Iron Kit',  'qr_code': 'TOO-001', 'status': 'Approved', 'due_date': '2026-03-28T00:00:00', 'student_number': '26-12345-111', 'borrower_name': 'Maria Lim',    'quantity': 1},
-    {'transaction_id': '5', 'equipment_name': 'Vernier Caliper',     'qr_code': 'MEA-001', 'status': 'Returned', 'due_date': '2026-03-20T00:00:00', 'student_number': '26-12345-099', 'borrower_name': 'Carlo Bato',   'quantity': 3},
-  ];
 }
 
 void main() async {
@@ -1043,6 +1004,8 @@ class _LoginScreenState extends State<LoginScreen> {
         Session.set(res['user'] as Map<String, dynamic>, res['role'] as String);
         Navigator.pushReplacement(context, MaterialPageRoute(
           builder: (_) => _isStudent ? const StudentHomeScreen() : const AdminDashboardScreen()));
+      } else if (res['message'] == 'email_not_verified') {
+        _showVerificationDialog(res['email'] as String);
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(res['message'] ?? 'Login failed.'), backgroundColor: AppTheme.danger));
@@ -1080,6 +1043,64 @@ class _LoginScreenState extends State<LoginScreen> {
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  void _showVerificationDialog(String email) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        contentPadding: const EdgeInsets.fromLTRB(24, 32, 24, 24),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          Container(
+            width: 72, height: 72,
+            decoration: const BoxDecoration(color: Color(0x1FFFFB70), shape: BoxShape.circle),
+            child: const Icon(Icons.mark_email_unread_outlined, color: AppTheme.accent, size: 40),
+          ),
+          const SizedBox(height: 20),
+          const Text('Email Not Verified',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppTheme.textDark)),
+          const SizedBox(height: 10),
+          Text('Please verify your email ($email) before signing in. Check your inbox for a verification link.',
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 13, color: AppTheme.textMid)),
+          const SizedBox(height: 24),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: () async {
+                // Show loading spinner first, THEN await — so we can show
+                // the result even if something goes wrong.
+                showDialog(
+                  context: context,
+                  barrierDismissible: false,
+                  builder: (_) => const Center(child: CircularProgressIndicator()),
+                );
+                final res = await ApiService.resendVerificationEmail(
+                    email, _passwordCtrl.text.trim());
+                if (!mounted) return;
+                Navigator.pop(context); // close loading spinner
+                Navigator.pop(context); // close verification dialog
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                  content: Text(res['success'] == true
+                      ? 'Verification email sent! Check your inbox and spam folder.'
+                      : (res['message'] ?? 'Failed to send. Please try again.')),
+                  backgroundColor:
+                      res['success'] == true ? AppTheme.success : AppTheme.danger,
+                  duration: const Duration(seconds: 6),
+                ));
+              },
+              child: const Text('Resend Verification Email'),
+            ),
+          ),
+          const SizedBox(height: 8),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ]),
+      ),
+    );
   }
 
   @override
@@ -1234,89 +1255,6 @@ class _LoginScreenState extends State<LoginScreen> {
                               : const Text('Sign In'),
                         ),
                       ),
-                      const SizedBox(height: 10),
-                      // ── Test Connection ──
-                      SizedBox(
-                        width: double.infinity,
-                        child: OutlinedButton.icon(
-                          onPressed: () async {
-                            try {
-                              final res = await ApiService.getEquipment();
-                              if (!context.mounted) return;
-                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                                content: Text('✅ Connected! Found ${res.length} equipment items.'),
-                                backgroundColor: AppTheme.success,
-                                behavior: SnackBarBehavior.floating,
-                              ));
-                            } catch (e) {
-                              if (!context.mounted) return;
-                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                                content: Text('❌ Cannot connect to Firebase: ${e.toString()}'),
-                                backgroundColor: AppTheme.danger,
-                                behavior: SnackBarBehavior.floating,
-                                duration: const Duration(seconds: 5),
-                              ));
-                            }
-                          },
-                          icon: const Icon(Icons.cloud_rounded, size: 16),
-                          label: const Text('Test Firebase Connection'),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: AppTheme.textMid,
-                            side: const BorderSide(color: AppTheme.divider),
-                          ),
-                        ),
-                      ),
-                      // ── Demo Mode ──
-                      const SizedBox(height: 20),
-                      Row(children: const [
-                        Expanded(child: Divider(color: AppTheme.divider)),
-                        Padding(
-                          padding: EdgeInsets.symmetric(horizontal: 10),
-                          child: Text('DEMO MODE',
-                              style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold,
-                                  color: AppTheme.textLight, letterSpacing: 1)),
-                        ),
-                        Expanded(child: Divider(color: AppTheme.divider)),
-                      ]),
-                      const SizedBox(height: 12),
-                      Row(children: [
-                        Expanded(
-                          child: _DemoButton(
-                            label: 'Student Demo',
-                            icon: Icons.school_rounded,
-                            color: AppTheme.primary,
-                            onTap: () {
-                              Session.set({
-                                'student_id':     '1',
-                                'name':           'Demo Student',
-                                'student_number': '26-10001-001',
-                                'course':         'BSECE',
-                                'year_level':     3,
-                              }, 'student', demo: true);
-                              Navigator.pushReplacement(context, MaterialPageRoute(
-                                  builder: (_) => const StudentHomeScreen()));
-                            },
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: _DemoButton(
-                            label: 'Staff Demo',
-                            icon: Icons.admin_panel_settings_rounded,
-                            color: AppTheme.accent,
-                            onTap: () {
-                              Session.set({
-                                'staff_id': '1',
-                                'name':     'Demo Staff',
-                                'email':    'demo@neu.edu.ph',
-                                'role':     'admin',
-                              }, 'staff', demo: true);
-                              Navigator.pushReplacement(context, MaterialPageRoute(
-                                  builder: (_) => const AdminDashboardScreen()));
-                            },
-                          ),
-                        ),
-                      ]),
                       // ── Sign Up Link (students only) ──
                       if (_isStudent) ...[
                         const SizedBox(height: 20),
@@ -1347,40 +1285,6 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-// ─── Demo Button Widget ───────────────────────────────────────────────────────
-
-class _DemoButton extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final Color color;
-  final VoidCallback onTap;
-  const _DemoButton({required this.label, required this.icon,
-      required this.color, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 12),
-        decoration: BoxDecoration(
-          color: color.withAlpha(20),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: color.withAlpha(77)),
-        ),
-        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-          Icon(icon, color: color, size: 22),
-          const SizedBox(height: 5),
-          Text(label,
-              style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: color)),
-          const SizedBox(height: 2),
-          Text('Tap to enter', style: TextStyle(fontSize: 10, color: color.withOpacity(0.6))),
-        ]),
       ),
     );
   }
@@ -1719,7 +1623,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
   final _lastNameCtrl = TextEditingController();
   final _emailCtrl = TextEditingController();
   final _studentIdCtrl = TextEditingController();
-  final _courseCtrl = TextEditingController();
+  String? _selectedCourse;
   final _yearCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
   final _confirmPassCtrl = TextEditingController();
@@ -1790,7 +1694,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
           'last_name':      _lastNameCtrl.text.trim(),
           'email':          _emailCtrl.text.trim(),
           'student_number': _studentIdCtrl.text.trim(),
-          'course':         _courseCtrl.text.trim(),
+          'course':         _selectedCourse ?? '',
           'year_level':     int.tryParse(_yearCtrl.text.trim()) ?? 1,
           'password':       _passCtrl.text,
         });
@@ -1809,7 +1713,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
                 const SizedBox(height: 20),
                 const Text('Account Created!', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: AppTheme.textDark)),
                 const SizedBox(height: 10),
-                Text('Welcome, ${_firstNameCtrl.text}! Your account has been created. You can now sign in to LabTrack.',
+                Text('Welcome, ${_firstNameCtrl.text}! A verification link has been sent to ${_emailCtrl.text.trim()}. Please check your inbox and verify your email before signing in.',
                     textAlign: TextAlign.center, style: const TextStyle(fontSize: 13, color: AppTheme.textMid)),
                 const SizedBox(height: 24),
                 SizedBox(width: double.infinity,
@@ -1838,7 +1742,6 @@ class _SignUpScreenState extends State<SignUpScreen> {
     _lastNameCtrl.dispose();
     _emailCtrl.dispose();
     _studentIdCtrl.dispose();
-    _courseCtrl.dispose();
     _yearCtrl.dispose();
     _passCtrl.dispose();
     _confirmPassCtrl.dispose();
@@ -2151,11 +2054,15 @@ class _SignUpScreenState extends State<SignUpScreen> {
                                 children: [
                                   _FieldLabel('Course / Program'),
                                   const SizedBox(height: 8),
-                                  TextFormField(
-                                    controller: _courseCtrl,
-                                    validator: _validateRequired,
+                                  DropdownButtonFormField<String>(
+                                    value: _selectedCourse,
+                                    validator: (v) => v == null ? 'Required' : null,
                                     decoration: const InputDecoration(
-                                        hintText: 'BSECE'),
+                                        contentPadding: EdgeInsets.symmetric(horizontal: 14, vertical: 14)),
+                                    hint: const Text('Select course'),
+                                    isExpanded: true,
+                                    items: _kCourses.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
+                                    onChanged: (v) => setState(() => _selectedCourse = v),
                                   ),
                                 ],
                               ),
@@ -2462,18 +2369,6 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
     return Scaffold(
       body: Column(
         children: [
-          if (Session.isDemoMode)
-            Container(
-              width: double.infinity,
-              color: AppTheme.accent,
-              padding: const EdgeInsets.symmetric(vertical: 6),
-              child: const Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                Icon(Icons.play_circle_outline_rounded, color: Colors.white, size: 14),
-                SizedBox(width: 6),
-                Text('DEMO MODE — Data is not saved to the database',
-                    style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
-              ]),
-            ),
           Expanded(child: _pages[_currentIndex]),
         ],
       ),
@@ -3180,170 +3075,6 @@ class _EmptyCard extends StatelessWidget {
 
 
 
-class _QuickAction extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final Color color;
-  final VoidCallback onTap;
-  const _QuickAction(
-      {required this.icon,
-      required this.label,
-      required this.color,
-      required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return Expanded(
-      child: GestureDetector(
-        onTap: onTap,
-        child: Container(
-          height: 72,
-          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
-          decoration: BoxDecoration(
-            color: color.withAlpha(26),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: color.withOpacity(0.2)),
-          ),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(icon, color: color, size: 22),
-              const SizedBox(height: 5),
-              FittedBox(
-                fit: BoxFit.scaleDown,
-                child: Text(label,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600,
-                        color: color)),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _LoanCard extends StatelessWidget {
-  final String name, id, dueDate, statusLabel;
-  final Color statusColor;
-  const _LoanCard(
-      {required this.name,
-      required this.id,
-      required this.dueDate,
-      required this.statusLabel,
-      required this.statusColor});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: const Color(0x141B3A8C),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: const Icon(Icons.science_outlined,
-                color: AppTheme.primary, size: 22),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(name,
-                    style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 14,
-                        color: AppTheme.textDark)),
-                const SizedBox(height: 2),
-                Text(id,
-                    style: const TextStyle(
-                        fontSize: 12, color: AppTheme.textMid)),
-              ],
-            ),
-          ),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              StatusBadge(label: statusLabel, color: statusColor),
-              const SizedBox(height: 4),
-              Text(dueDate,
-                  style: const TextStyle(
-                      fontSize: 11, color: AppTheme.textMid)),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _NotificationCard extends StatelessWidget {
-  final IconData icon;
-  final Color color;
-  final String title, body, time;
-  const _NotificationCard(
-      {required this.icon,
-      required this.color,
-      required this.title,
-      required this.body,
-      required this.time});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 38,
-            height: 38,
-            decoration: BoxDecoration(
-                color: color.withAlpha(31), shape: BoxShape.circle),
-            child: Icon(icon, color: color, size: 18),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title,
-                    style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 13,
-                        color: AppTheme.textDark)),
-                const SizedBox(height: 2),
-                Text(body,
-                    style: const TextStyle(
-                        fontSize: 12, color: AppTheme.textMid)),
-              ],
-            ),
-          ),
-          const SizedBox(width: 8),
-          Text(time,
-              style: const TextStyle(fontSize: 11, color: AppTheme.textLight)),
-        ],
-      ),
-    );
-  }
-}
-
 // ─── Equipment Catalog Screen ─────────────────────────────────────────────────
 
 class EquipmentCatalogScreen extends StatefulWidget {
@@ -3357,6 +3088,7 @@ class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
   final Set<String> _selectedCategories = {};
   final _categories = ['Electronics', 'Optics', 'Measurement', 'Tools', 'Microcontroller'];
   bool _dropdownOpen = false;
+  bool _showAllCourses = false;
   bool _loading = true;
   bool _hasError = false;
   List<dynamic> _items = [];
@@ -3377,7 +3109,6 @@ class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
     }
   }
 
-  // Returns an icon based on equipment category
   IconData _equipmentIcon(String category) {
     switch (category.toLowerCase()) {
       case 'electronics':     return Icons.electric_bolt_rounded;
@@ -3387,6 +3118,18 @@ class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
       case 'microcontroller': return Icons.memory_rounded;
       default:                return Icons.science_outlined;
     }
+  }
+
+  Widget _catalogIconBox(String category, bool isAvailable) {
+    final color = isAvailable ? AppTheme.success : AppTheme.danger;
+    return Container(
+      width: 50, height: 50,
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Icon(_equipmentIcon(category), color: color, size: 24),
+    );
   }
 
   String get _filterLabel {
@@ -3406,12 +3149,18 @@ class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final studentCourse = Session.course;
     final filtered = _items.where((e) {
       final matchCat = _selectedCategories.isEmpty ||
           _selectedCategories.contains(e['category']);
       final matchSearch = _search.isEmpty ||
           (e['equipment_name'] as String).toLowerCase().contains(_search.toLowerCase());
-      return matchCat && matchSearch;
+      final itemCourses = (e['courses'] as List?)?.cast<String>() ?? [];
+      final matchCourse = _showAllCourses ||
+          studentCourse.isEmpty ||
+          itemCourses.isEmpty ||
+          itemCourses.contains(studentCourse);
+      return matchCat && matchSearch && matchCourse;
     }).toList();
 
     return Scaffold(
@@ -3733,6 +3482,31 @@ class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
                 ],
               ),
             ),
+          if (Session.course.isNotEmpty)
+            Container(
+              color: const Color(0xFFF0F4FF),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Row(
+                children: [
+                  const Icon(Icons.school_outlined, size: 14, color: AppTheme.primary),
+                  const SizedBox(width: 6),
+                  Text(
+                    _showAllCourses
+                        ? 'Showing all courses'
+                        : 'Showing equipment for ${Session.course}',
+                    style: const TextStyle(fontSize: 12, color: AppTheme.primary, fontWeight: FontWeight.w600),
+                  ),
+                  const Spacer(),
+                  GestureDetector(
+                    onTap: () => setState(() => _showAllCourses = !_showAllCourses),
+                    child: Text(
+                      _showAllCourses ? 'My course only' : 'Show all',
+                      style: const TextStyle(fontSize: 12, color: AppTheme.accent, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           Expanded(
             child: ListView.separated(
               padding: const EdgeInsets.all(16),
@@ -3744,12 +3518,10 @@ class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
                 final isAvailable = (e['status'] ?? 'Available') == 'Available';
                 final category = e['category'] as String? ?? '';
                 return GestureDetector(
-                  onTap: isAvailable ? () => Navigator.push(
+                  onTap: () => Navigator.push(
                       context,
                       MaterialPageRoute(
-                          builder: (_) => BorrowRequestScreen(
-                              equipmentName: e['equipment_name'] as String,
-                              equipmentId: '${e['equipment_id']}'))) : null,
+                          builder: (_) => EquipmentDetailScreen(equipment: e))),
                   child: Container(
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
@@ -3764,16 +3536,21 @@ class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
                     ),
                     child: Row(
                       children: [
-                        Container(
-                          width: 50,
-                          height: 50,
-                          decoration: BoxDecoration(
-                            color: (isAvailable ? AppTheme.success : AppTheme.danger).withOpacity(0.10),
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                          child: Icon(_equipmentIcon(category),
-                              color: isAvailable ? AppTheme.success : AppTheme.danger,
-                              size: 24),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(14),
+                          child: (e['image_url'] as String? ?? '').isNotEmpty
+                              ? Image.network(
+                                  e['image_url'] as String,
+                                  width: 50, height: 50,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (context, error, stack) =>
+                                      _catalogIconBox(category, isAvailable),
+                                  loadingBuilder: (_, child, progress) =>
+                                      progress == null
+                                          ? child
+                                          : _catalogIconBox(category, isAvailable),
+                                )
+                              : _catalogIconBox(category, isAvailable),
                         ),
                         const SizedBox(width: 14),
                         Expanded(
@@ -3825,6 +3602,280 @@ class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
       ),
     );
   }
+}
+
+// ─── Equipment Detail Screen ───────────────────────────────────────────────────
+
+class EquipmentDetailScreen extends StatelessWidget {
+  final Map<String, dynamic> equipment;
+  const EquipmentDetailScreen({super.key, required this.equipment});
+
+  IconData _categoryIcon(String cat) {
+    switch (cat.toLowerCase()) {
+      case 'electronics':     return Icons.electric_bolt_rounded;
+      case 'tools':           return Icons.build_rounded;
+      case 'measurement':     return Icons.straighten_rounded;
+      case 'optics':          return Icons.remove_red_eye_rounded;
+      case 'microcontroller': return Icons.memory_rounded;
+      default:                return Icons.science_outlined;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final name      = equipment['equipment_name'] as String? ?? '';
+    final category  = equipment['category']       as String? ?? '';
+    final status    = equipment['status']         as String? ?? 'Available';
+    final location  = equipment['location']       as String? ?? '';
+    final qrCode    = equipment['qr_code']        as String? ?? '';
+    final brand     = equipment['brand']          as String? ?? '';
+    final model     = equipment['model']          as String? ?? '';
+    final serial    = equipment['serial_number']  as String? ?? '';
+    final desc      = equipment['description']    as String? ?? '';
+    final imageUrl  = equipment['image_url']      as String? ?? '';
+    final courses   = (equipment['courses'] as List?)?.cast<String>() ?? [];
+    final equipId   = '${equipment['equipment_id'] ?? ''}';
+    final isAvail   = status == 'Available';
+    final isStudent = Session.role == 'student';
+
+    return Scaffold(
+      backgroundColor: AppTheme.surface,
+      body: CustomScrollView(
+        slivers: [
+          // ── App bar with collapsing image ──
+          SliverAppBar(
+            expandedHeight: imageUrl.isNotEmpty ? 260 : 160,
+            pinned: true,
+            backgroundColor: AppTheme.primary,
+            iconTheme: const IconThemeData(color: Colors.white),
+            flexibleSpace: FlexibleSpaceBar(
+              background: imageUrl.isNotEmpty
+                  ? Stack(fit: StackFit.expand, children: [
+                      Image.network(
+                        imageUrl,
+                        fit: BoxFit.cover,
+                        errorBuilder: (context, error, stack) =>
+                            _imageFallback(category),
+                        loadingBuilder: (_, child, progress) {
+                          if (progress == null) return child;
+                          return Container(
+                            color: AppTheme.primary,
+                            child: Center(
+                              child: CircularProgressIndicator(
+                                value: progress.expectedTotalBytes != null
+                                    ? progress.cumulativeBytesLoaded /
+                                        progress.expectedTotalBytes!
+                                    : null,
+                                color: Colors.white,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                      // Dark gradient so text is readable
+                      const DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [Color(0x33000000), Color(0xAA000000)],
+                          ),
+                        ),
+                      ),
+                    ])
+                  : _imageFallback(category),
+              title: Text(name,
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold)),
+              titlePadding: const EdgeInsets.fromLTRB(56, 0, 16, 16),
+            ),
+          ),
+
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // ── Status + Category row ──
+                  Row(children: [
+                    StatusBadge(
+                      label: status,
+                      color: isAvail ? AppTheme.success : AppTheme.danger,
+                    ),
+                    const SizedBox(width: 8),
+                    StatusBadge(label: category, color: AppTheme.primary),
+                    if (location.isNotEmpty) ...[
+                      const SizedBox(width: 8),
+                      StatusBadge(
+                        label: location,
+                        color: AppTheme.textMid,
+                      ),
+                    ],
+                  ]),
+                  const SizedBox(height: 20),
+
+                  // ── Description ──
+                  if (desc.isNotEmpty) ...[
+                    const Text('About this equipment',
+                        style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                            color: AppTheme.textDark)),
+                    const SizedBox(height: 8),
+                    Text(desc,
+                        style: const TextStyle(
+                            fontSize: 13,
+                            color: AppTheme.textMid,
+                            height: 1.6)),
+                    const SizedBox(height: 20),
+                  ],
+
+                  // ── Specifications table ──
+                  const Text('Specifications',
+                      style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: AppTheme.textDark)),
+                  const SizedBox(height: 10),
+                  Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: AppTheme.divider),
+                    ),
+                    child: Column(children: [
+                      if (brand.isNotEmpty)
+                        _specRow('Brand / Manufacturer', brand, isFirst: true),
+                      if (model.isNotEmpty)
+                        _specRow('Model', model, isFirst: brand.isEmpty),
+                      if (serial.isNotEmpty)
+                        _specRow('Serial Number', serial,
+                            isFirst: brand.isEmpty && model.isEmpty),
+                      _specRow('Category', category,
+                          isFirst: brand.isEmpty && model.isEmpty && serial.isEmpty),
+                      if (location.isNotEmpty) _specRow('Storage Location', location),
+                      _specRow('Status', status, isLast: courses.isEmpty),
+                      if (courses.isNotEmpty)
+                        _specRow('Available to', courses.join(', '), isLast: true),
+                    ]),
+                  ),
+                  // ── QR Code card ──
+                  if (qrCode.isNotEmpty) ...[
+                    const SizedBox(height: 20),
+                    const Text('QR Code',
+                        style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                            color: AppTheme.textDark)),
+                    const SizedBox(height: 10),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(vertical: 20),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: AppTheme.divider),
+                      ),
+                      child: Column(children: [
+                        QrImageView(
+                          data: qrCode,
+                          version: QrVersions.auto,
+                          size: 180,
+                          eyeStyle: const QrEyeStyle(
+                              eyeShape: QrEyeShape.square,
+                              color: AppTheme.primary),
+                          dataModuleStyle: const QrDataModuleStyle(
+                              dataModuleShape: QrDataModuleShape.square,
+                              color: AppTheme.primary),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(qrCode,
+                            style: const TextStyle(
+                                fontSize: 12,
+                                color: AppTheme.textMid,
+                                letterSpacing: 1.2)),
+                      ]),
+                    ),
+                  ],
+                  const SizedBox(height: 28),
+
+                  // ── Borrow button (students only, available only) ──
+                  if (isStudent)
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        onPressed: isAvail
+                            ? () => Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                    builder: (_) => BorrowRequestScreen(
+                                        equipmentName: name,
+                                        equipmentId: equipId)))
+                            : null,
+                        icon: Icon(isAvail
+                            ? Icons.assignment_outlined
+                            : Icons.block_rounded),
+                        label: Text(
+                            isAvail ? 'Borrow This Equipment' : 'Currently Unavailable'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor:
+                              isAvail ? AppTheme.primary : AppTheme.textLight,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _imageFallback(String category) {
+    return Container(
+      color: AppTheme.primary,
+      child: Center(
+        child: Icon(_categoryIcon(category), size: 72, color: Colors.white24),
+      ),
+    );
+  }
+}
+
+Widget _specRow(String label, String value,
+    {bool isFirst = false, bool isLast = false}) {
+  return Container(
+    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+    decoration: BoxDecoration(
+      border: Border(
+        top: isFirst ? BorderSide.none : const BorderSide(color: AppTheme.divider),
+      ),
+    ),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 130,
+          child: Text(label,
+              style: const TextStyle(
+                  fontSize: 12,
+                  color: AppTheme.textMid,
+                  fontWeight: FontWeight.w500)),
+        ),
+        Expanded(
+          child: Text(value,
+              style: const TextStyle(
+                  fontSize: 13,
+                  color: AppTheme.textDark,
+                  fontWeight: FontWeight.w600)),
+        ),
+      ],
+    ),
+  );
 }
 
 // ─── Borrow Request Screen ─────────────────────────────────────────────────────
@@ -3937,7 +3988,9 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
                 items = data.where((e) => e['status'] == 'Available').toList();
                 loading = false;
               });
-            }).catchError((_) => setSheetState(() => loading = false));
+            }).catchError((_) {
+              setSheetState(() => loading = false);
+            });
           }
 
           return Container(
@@ -5209,17 +5262,6 @@ class _DamageReportScreenState extends State<DamageReportScreen> {
   Future<void> _loadBorrowedEquipment() async {
     setState(() => _loadingEquipment = true);
     try {
-      if (Session.isDemoMode) {
-        // Demo borrowed items
-        setState(() {
-          _borrowedItems = [
-            {'equipment_id': '1', 'equipment_name': 'Digital Multimeter', 'qr_code': 'ELE-001'},
-            {'equipment_id': '2', 'equipment_name': 'Oscilloscope',       'qr_code': 'ELE-002'},
-          ];
-          _loadingEquipment = false;
-        });
-        return;
-      }
       final loans = await ApiService.getMyBorrowings(
         studentId: Session.currentUser?['student_id'],
         studentNumber: Session.studentNumber,
@@ -5711,29 +5753,29 @@ class EditProfileScreen extends StatefulWidget {
 
 class _EditProfileScreenState extends State<EditProfileScreen> {
   late TextEditingController _nameCtrl;
-  late TextEditingController _courseCtrl;
+  String? _selectedCourse;
   late TextEditingController _yearCtrl;
   bool _saving = false;
 
   @override
   void initState() {
     super.initState();
-    _nameCtrl   = TextEditingController(text: Session.name);
-    _courseCtrl = TextEditingController(text: Session.currentUser?['course'] ?? '');
-    _yearCtrl   = TextEditingController(text: '${Session.currentUser?['year_level'] ?? ''}');
+    _nameCtrl = TextEditingController(text: Session.name);
+    final stored = Session.currentUser?['course'] as String?;
+    _selectedCourse = _kCourses.contains(stored) ? stored : null;
+    _yearCtrl = TextEditingController(text: '${Session.currentUser?['year_level'] ?? ''}');
   }
 
   @override
   void dispose() {
     _nameCtrl.dispose();
-    _courseCtrl.dispose();
     _yearCtrl.dispose();
     super.dispose();
   }
 
   Future<void> _save() async {
-    final name      = _nameCtrl.text.trim();
-    final course    = _courseCtrl.text.trim();
+    final name   = _nameCtrl.text.trim();
+    final course = _selectedCourse ?? '';
     final yearLevel = int.tryParse(_yearCtrl.text.trim()) ?? 1;
 
     if (name.isEmpty) {
@@ -5861,12 +5903,15 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
             _FieldLabel('Course'),
             const SizedBox(height: 8),
-            TextField(
-              controller: _courseCtrl,
-              textCapitalization: TextCapitalization.characters,
+            DropdownButtonFormField<String>(
+              value: _selectedCourse,
               decoration: const InputDecoration(
-                  hintText: 'e.g. BSECE',
+                  contentPadding: EdgeInsets.symmetric(horizontal: 14, vertical: 14),
                   prefixIcon: Icon(Icons.school_outlined, color: AppTheme.textMid)),
+              hint: const Text('Select course'),
+              isExpanded: true,
+              items: _kCourses.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
+              onChanged: (v) => setState(() => _selectedCourse = v),
             ),
             const SizedBox(height: 16),
 
@@ -6530,7 +6575,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     super.initState();
     // ── Auth guard — redirect if not staff ──
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!Session.isDemoMode && Session.role != 'staff') {
+      if (Session.role != 'staff') {
         Navigator.pushReplacement(context,
             MaterialPageRoute(builder: (_) => const LoginScreen()));
       }
@@ -6597,18 +6642,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       ),
       body: Column(
         children: [
-          if (Session.isDemoMode)
-            Container(
-              width: double.infinity,
-              color: AppTheme.accent,
-              padding: const EdgeInsets.symmetric(vertical: 6),
-              child: const Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                Icon(Icons.play_circle_outline_rounded, color: Colors.white, size: 14),
-                SizedBox(width: 6),
-                Text('DEMO MODE — Data is not saved to the database',
-                    style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
-              ]),
-            ),
           Expanded(child: _pages[_currentIndex]),
         ],
       ),
@@ -6672,10 +6705,22 @@ class _AdminHomeState extends State<_AdminHome> {
   Future<void> _load() async {
     setState(() => _loading = true);
     try {
-      final stats    = await ApiService.getDashboardStats();
-      final requests = await ApiService.getRequests();
+      final equipment = await ApiService.getEquipment();
+      final requests  = await ApiService.getRequests();
+      final now = DateTime.now();
       setState(() {
-        _stats    = stats;
+        _stats = {
+          'pending_requests':    requests.where((e) => e['status'] == 'Pending').length,
+          'active_loans':        requests.where((e) => e['status'] == 'Approved').length,
+          'overdue_loans':       requests.where((e) {
+            if (e['status'] != 'Approved') return false;
+            final due = DateTime.tryParse('${e['due_date']}'.replaceAll(' ', 'T'));
+            return due != null && due.isBefore(now);
+          }).length,
+          'total_equipment':     equipment.length,
+          'available_equipment': equipment.where((e) => e['status'] == 'Available').length,
+          'damage_reports':      0,
+        };
         _pending  = requests.where((e) => e['status'] == 'Pending').toList();
         _approved = requests.where((e) => e['status'] == 'Approved').toList();
         _loading  = false;
@@ -6719,6 +6764,7 @@ class _AdminHomeState extends State<_AdminHome> {
     if (confirm == true) {
       try {
         await ApiService.returnEquipment(txId, 'Good');
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('Equipment marked as returned!'),
           backgroundColor: AppTheme.success,
@@ -7116,133 +7162,6 @@ class _AdminStatCard extends StatelessWidget {
   }
 }
 
-class _AdminRequestCard extends StatelessWidget {
-  final String student, studentId, item, dueDate;
-  const _AdminRequestCard(
-      {required this.student,
-      required this.studentId,
-      required this.item,
-      required this.dueDate});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-          color: Colors.white, borderRadius: BorderRadius.circular(16)),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              CircleAvatar(
-                radius: 18,
-                backgroundColor: const Color(0x1AF5A623),
-                child: Text(student[0],
-                    style: const TextStyle(
-                        color: AppTheme.accent,
-                        fontWeight: FontWeight.bold)),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(student,
-                        style: const TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 13,
-                            color: AppTheme.textDark)),
-                    Text('$studentId  •  $item  •  Due $dueDate',
-                        style: const TextStyle(
-                            fontSize: 11, color: AppTheme.textMid)),
-                  ],
-                ),
-              ),
-              StatusBadge(label: 'Pending', color: AppTheme.accent),
-            ],
-          ),
-          const SizedBox(height: 12),
-          const Divider(color: AppTheme.divider, height: 1),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: () {},
-                  icon: const Icon(Icons.close_rounded, size: 16),
-                  label: const Text('Deny'),
-                  style: OutlinedButton.styleFrom(
-                      foregroundColor: AppTheme.danger,
-                      side: const BorderSide(color: AppTheme.danger)),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: () {},
-                  icon: const Icon(Icons.check_rounded, size: 16),
-                  label: const Text('Approve'),
-                  style: ElevatedButton.styleFrom(
-                      backgroundColor: AppTheme.success),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _OverdueCard extends StatelessWidget {
-  final String student, item;
-  final int overdueDays;
-  const _OverdueCard(
-      {required this.student,
-      required this.item,
-      required this.overdueDays});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0x0FEF4444),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0x33EF4444)),
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.access_time_filled_rounded,
-              color: AppTheme.danger, size: 22),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(student,
-                    style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 13,
-                        color: AppTheme.textDark)),
-                Text('$item  •  $overdueDays day${overdueDays > 1 ? 's' : ''} overdue',
-                    style: const TextStyle(
-                        fontSize: 12, color: AppTheme.textMid)),
-              ],
-            ),
-          ),
-          TextButton(
-              onPressed: () {},
-              child: const Text('Notify',
-                  style: TextStyle(
-                      color: AppTheme.danger,
-                      fontWeight: FontWeight.bold))),
-        ],
-      ),
-    );
-  }
-}
-
 // ─── Admin Requests Screen ────────────────────────────────────────────────────
 
 class AdminRequestsScreen extends StatefulWidget {
@@ -7429,6 +7348,18 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
     }
   }
 
+  void _openEdit(Map<String, dynamic> equipment) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _EditEquipmentSheet(
+        equipment: equipment,
+        onSaved: _load,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) return const Center(child: CircularProgressIndicator());
@@ -7560,19 +7491,9 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
                       final condColor = _conditionColor(status);
 
                       return GestureDetector(
-                        onTap: () => Navigator.push(
-                            context,
+                        onTap: () => Navigator.push(context,
                             MaterialPageRoute(
-                                builder: (_) => EquipmentDetailScreen(equipment: {
-                                  'name': e['equipment_name'],
-                                  'id':   e['qr_code'],
-                                  'cat':  e['category'],
-                                  'status': e['status'],
-                                  'location': e['location'] ?? '',
-                                  'qty': 1,
-                                  'available': status == 'Available' ? 1 : 0,
-                                  'condition': status,
-                                }))),
+                                builder: (_) => EquipmentDetailScreen(equipment: e))),
                         child: Container(
                           padding: const EdgeInsets.all(16),
                           decoration: BoxDecoration(
@@ -7582,18 +7503,16 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
                           ),
                           child: Row(
                             children: [
-                              // Icon box
                               Container(
                                 width: 48,
                                 height: 48,
                                 decoration: BoxDecoration(
-                                    color: condColor.withOpacity(0.10),
+                                    color: condColor.withValues(alpha: 0.10),
                                     borderRadius: BorderRadius.circular(12)),
                                 child: Icon(_equipmentIcon(e['category'] as String? ?? ''),
                                     color: condColor, size: 24),
                               ),
                               const SizedBox(width: 14),
-                              // Info
                               Expanded(
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -7604,26 +7523,31 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
                                     Text('${e['qr_code']}  ·  ${e['category']}',
                                         style: const TextStyle(fontSize: 12, color: AppTheme.textMid)),
                                     const SizedBox(height: 8),
-                                    Row(
-                                      children: [
-                                        // Availability bar
-                                        Expanded(
-                                          child: Column(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
-                                            children: [
-                                              StatusBadge(label: status, color: condColor),
-                                            ],
-                                          ),
-                                        ),
-                                        const SizedBox(width: 12),
-                                        StatusBadge(label: e['category'] as String, color: AppTheme.primary),
-                                      ],
-                                    ),
+                                    Row(children: [
+                                      Expanded(child: StatusBadge(label: status, color: condColor)),
+                                      const SizedBox(width: 12),
+                                      StatusBadge(label: e['category'] as String, color: AppTheme.primary),
+                                    ]),
                                   ],
                                 ),
                               ),
-                              const SizedBox(width: 8),
-                              const Icon(Icons.chevron_right_rounded, color: AppTheme.textLight),
+                              const SizedBox(width: 4),
+                              PopupMenuButton<String>(
+                                onSelected: (v) {
+                                  if (v == 'edit') _openEdit(e);
+                                },
+                                itemBuilder: (_) => const [
+                                  PopupMenuItem(
+                                    value: 'edit',
+                                    child: Row(children: [
+                                      Icon(Icons.edit_outlined, size: 18, color: AppTheme.textMid),
+                                      SizedBox(width: 8),
+                                      Text('Edit Details'),
+                                    ]),
+                                  ),
+                                ],
+                                child: const Icon(Icons.more_vert_rounded, color: AppTheme.textLight),
+                              ),
                             ],
                           ),
                         ),
@@ -7640,6 +7564,7 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
               MaterialPageRoute(builder: (_) => const EquipmentRegistrationScreen()));
           if (result != null) {
             _load(); // reload from API
+            if (!mounted) return;
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Text('${result['name']} registered successfully!'),
@@ -7654,6 +7579,377 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
         foregroundColor: AppTheme.primary,
         icon: const Icon(Icons.add_rounded),
         label: const Text('Add Equipment', style: TextStyle(fontWeight: FontWeight.bold)),
+      ),
+    );
+  }
+}
+
+// ── Inventory stat mini-card ──
+// ─── Edit Equipment Bottom Sheet ──────────────────────────────────────────────
+
+class _EditEquipmentSheet extends StatefulWidget {
+  final Map<String, dynamic> equipment;
+  final VoidCallback onSaved;
+  const _EditEquipmentSheet({required this.equipment, required this.onSaved});
+  @override
+  State<_EditEquipmentSheet> createState() => _EditEquipmentSheetState();
+}
+
+class _EditEquipmentSheetState extends State<_EditEquipmentSheet> {
+  late final TextEditingController _nameCtrl;
+  late final TextEditingController _brandCtrl;
+  late final TextEditingController _modelCtrl;
+  late final TextEditingController _serialCtrl;
+  late final TextEditingController _locationCtrl;
+  late final TextEditingController _descCtrl;
+
+  late String? _selectedCategory;
+  late String _selectedStatus;
+  late List<String> _selectedCourses;
+  XFile? _pickedImage;
+  bool _saving = false;
+
+  final _imagePicker = ImagePicker();
+  final _statuses    = ['Available', 'Borrowed', 'Under Repair', 'For Disposal'];
+  final _categories  = ['Electronics', 'Optics', 'Measurement', 'Tools', 'Safety', 'Other'];
+
+  @override
+  void initState() {
+    super.initState();
+    final e = widget.equipment;
+    _nameCtrl     = TextEditingController(text: e['equipment_name'] as String? ?? '');
+    _brandCtrl    = TextEditingController(text: e['brand']          as String? ?? '');
+    _modelCtrl    = TextEditingController(text: e['model']          as String? ?? '');
+    _serialCtrl   = TextEditingController(text: e['serial_number']  as String? ?? '');
+    _locationCtrl = TextEditingController(text: e['location']       as String? ?? '');
+    _descCtrl     = TextEditingController(text: e['description']    as String? ?? '');
+    _selectedCategory = e['category'] as String?;
+    _selectedStatus   = (e['status'] as String?) ?? 'Available';
+    _selectedCourses  = List<String>.from((e['courses'] as List?) ?? []);
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose(); _brandCtrl.dispose(); _modelCtrl.dispose();
+    _serialCtrl.dispose(); _locationCtrl.dispose(); _descCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickImage(ImageSource source) async {
+    final picked = await _imagePicker.pickImage(
+        source: source, imageQuality: 80, maxWidth: 1200);
+    if (picked != null) setState(() => _pickedImage = picked);
+  }
+
+  Future<void> _save() async {
+    final equipmentId = '${widget.equipment['equipment_id'] ?? ''}';
+    if (equipmentId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Cannot edit demo equipment.'),
+          backgroundColor: AppTheme.danger));
+      return;
+    }
+    setState(() => _saving = true);
+    try {
+      String imageUrl = widget.equipment['image_url'] as String? ?? '';
+      if (_pickedImage != null) {
+        final bytes = await _pickedImage!.readAsBytes();
+        final url = await ApiService.uploadEquipmentImage(equipmentId, bytes);
+        if (url != null && url.isNotEmpty) imageUrl = url;
+      }
+      final res = await ApiService.updateEquipment(equipmentId, {
+        'equipment_name': _nameCtrl.text.trim(),
+        'category':       _selectedCategory ?? widget.equipment['category'],
+        'status':         _selectedStatus,
+        'location':       _locationCtrl.text.trim(),
+        'brand':          _brandCtrl.text.trim(),
+        'model':          _modelCtrl.text.trim(),
+        'serial_number':  _serialCtrl.text.trim(),
+        'description':    _descCtrl.text.trim(),
+        'courses':        _selectedCourses,
+        'image_url':      imageUrl,
+      });
+      if (!mounted) return;
+      if (res['success'] == true) {
+        Navigator.pop(context);
+        widget.onSaved();
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Equipment updated successfully.'),
+            backgroundColor: AppTheme.success));
+      } else {
+        setState(() => _saving = false);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(res['message'] ?? 'Update failed.'),
+            backgroundColor: AppTheme.danger));
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _saving = false);
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Cannot connect to server.'),
+            backgroundColor: AppTheme.danger));
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DraggableScrollableSheet(
+      initialChildSize: 0.92,
+      minChildSize: 0.5,
+      maxChildSize: 0.97,
+      expand: false,
+      builder: (_, scroll) => Container(
+        decoration: const BoxDecoration(
+          color: AppTheme.surface,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        child: Column(children: [
+          // Handle bar
+          Container(
+            margin: const EdgeInsets.symmetric(vertical: 12),
+            width: 40, height: 4,
+            decoration: BoxDecoration(
+                color: AppTheme.divider, borderRadius: BorderRadius.circular(2)),
+          ),
+          // Title row
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 8, 12),
+            child: Row(children: [
+              const Expanded(
+                child: Text('Edit Equipment',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold,
+                        color: AppTheme.textDark)),
+              ),
+              TextButton(
+                onPressed: _saving ? null : () => Navigator.pop(context),
+                child: const Text('Cancel'),
+              ),
+            ]),
+          ),
+          const Divider(height: 1),
+          // Scrollable form
+          Expanded(
+            child: ListView(controller: scroll, padding: const EdgeInsets.all(20),
+              children: [
+                // Photo picker
+                _FieldLabel('Equipment Photo'),
+                const SizedBox(height: 8),
+                if (_pickedImage != null)
+                  Stack(children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: Image.file(File(_pickedImage!.path),
+                          height: 160, width: double.infinity, fit: BoxFit.cover),
+                    ),
+                    Positioned(
+                      top: 8, right: 8,
+                      child: GestureDetector(
+                        onTap: () => setState(() => _pickedImage = null),
+                        child: Container(
+                          padding: const EdgeInsets.all(4),
+                          decoration: const BoxDecoration(
+                              color: AppTheme.danger, shape: BoxShape.circle),
+                          child: const Icon(Icons.close_rounded,
+                              color: Colors.white, size: 16),
+                        ),
+                      ),
+                    ),
+                  ])
+                else if ((widget.equipment['image_url'] as String? ?? '').isNotEmpty)
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: Image.network(
+                      widget.equipment['image_url'] as String,
+                      height: 160, width: double.infinity, fit: BoxFit.cover,
+                      errorBuilder: (context, error, stack) => const SizedBox.shrink(),
+                    ),
+                  )
+                else
+                  Container(
+                    height: 100,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: AppTheme.divider),
+                    ),
+                    child: const Center(
+                      child: Column(mainAxisSize: MainAxisSize.min, children: [
+                        Icon(Icons.image_outlined, size: 32, color: AppTheme.textLight),
+                        SizedBox(height: 4),
+                        Text('No photo', style: TextStyle(fontSize: 12, color: AppTheme.textLight)),
+                      ]),
+                    ),
+                  ),
+                const SizedBox(height: 10),
+                Row(children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => _pickImage(ImageSource.camera),
+                      icon: const Icon(Icons.camera_alt_outlined),
+                      label: const Text('Take Photo'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => _pickImage(ImageSource.gallery),
+                      icon: const Icon(Icons.photo_library_outlined),
+                      label: const Text('From Gallery'),
+                    ),
+                  ),
+                ]),
+                const SizedBox(height: 20),
+
+                // Status + Category
+                Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    _FieldLabel('Status *'),
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+                      decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: AppTheme.divider)),
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<String>(
+                          isExpanded: true,
+                          value: _selectedStatus,
+                          items: _statuses.map((s) => DropdownMenuItem(
+                              value: s,
+                              child: Text(s, style: const TextStyle(fontSize: 13)))).toList(),
+                          onChanged: (v) => setState(() => _selectedStatus = v!),
+                        ),
+                      ),
+                    ),
+                  ])),
+                  const SizedBox(width: 12),
+                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    _FieldLabel('Category *'),
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+                      decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: AppTheme.divider)),
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<String>(
+                          isExpanded: true,
+                          value: _selectedCategory,
+                          hint: const Text('Select', style: TextStyle(fontSize: 13)),
+                          items: _categories.map((c) => DropdownMenuItem(
+                              value: c,
+                              child: Text(c, style: const TextStyle(fontSize: 13)))).toList(),
+                          onChanged: (v) => setState(() => _selectedCategory = v),
+                        ),
+                      ),
+                    ),
+                  ])),
+                ]),
+                const SizedBox(height: 16),
+
+                _FieldLabel('Equipment Name *'),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: _nameCtrl,
+                  textCapitalization: TextCapitalization.words,
+                  decoration: const InputDecoration(
+                    hintText: 'e.g. Digital Multimeter',
+                    prefixIcon: Icon(Icons.science_outlined, color: AppTheme.textMid),
+                  ),
+                ),
+                const SizedBox(height: 16),
+
+                _FieldLabel('Storage Location'),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: _locationCtrl,
+                  decoration: const InputDecoration(
+                    hintText: 'e.g. Cabinet A, Shelf 2',
+                    prefixIcon: Icon(Icons.location_on_outlined, color: AppTheme.textMid),
+                  ),
+                ),
+                const SizedBox(height: 16),
+
+                Row(children: [
+                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    _FieldLabel('Brand'),
+                    const SizedBox(height: 8),
+                    TextField(controller: _brandCtrl,
+                        decoration: const InputDecoration(hintText: 'e.g. Fluke')),
+                  ])),
+                  const SizedBox(width: 12),
+                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    _FieldLabel('Model'),
+                    const SizedBox(height: 8),
+                    TextField(controller: _modelCtrl,
+                        decoration: const InputDecoration(hintText: 'e.g. 117')),
+                  ])),
+                ]),
+                const SizedBox(height: 16),
+
+                _FieldLabel('Serial Number'),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: _serialCtrl,
+                  decoration: const InputDecoration(
+                    hintText: 'e.g. SN-20241105-001',
+                    prefixIcon: Icon(Icons.tag_rounded, color: AppTheme.textMid),
+                  ),
+                ),
+                const SizedBox(height: 16),
+
+                _FieldLabel('Description'),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: _descCtrl,
+                  maxLines: 3,
+                  decoration: const InputDecoration(
+                    hintText: 'Brief description of the equipment...',
+                  ),
+                ),
+                const SizedBox(height: 16),
+
+                _FieldLabel('Available to Courses'),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8, runSpacing: 6,
+                  children: _kCourses.map((c) {
+                    final sel = _selectedCourses.contains(c);
+                    return FilterChip(
+                      label: Text(c, style: TextStyle(
+                          fontSize: 12, color: sel ? Colors.white : AppTheme.textDark)),
+                      selected: sel,
+                      selectedColor: AppTheme.primary,
+                      backgroundColor: AppTheme.surface,
+                      checkmarkColor: Colors.white,
+                      side: BorderSide(color: sel ? AppTheme.primary : AppTheme.divider),
+                      onSelected: (v) => setState(() {
+                        if (v) { _selectedCourses.add(c); } else { _selectedCourses.remove(c); }
+                      }),
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: 32),
+
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: _saving ? null : _save,
+                    icon: _saving
+                        ? const SizedBox(width: 18, height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                        : const Icon(Icons.save_outlined),
+                    label: Text(_saving ? 'Saving…' : 'Save Changes'),
+                  ),
+                ),
+                const SizedBox(height: 20),
+              ],
+            ),
+          ),
+        ]),
       ),
     );
   }
@@ -7701,181 +7997,9 @@ class _InvStat extends StatelessWidget {
   }
 }
 
-// ─── Equipment Detail Screen ───────────────────────────────────────────────────
-
-class EquipmentDetailScreen extends StatelessWidget {
-  final Map<String, dynamic> equipment;
-  const EquipmentDetailScreen({super.key, required this.equipment});
-
-  @override
-  Widget build(BuildContext context) {
-    final avail = equipment['available'] as int;
-    final qty = equipment['qty'] as int;
-    final borrowed = qty - avail;
-
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(equipment['id'] as String),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.edit_outlined, color: Colors.white),
-            onPressed: () {},
-            tooltip: 'Edit',
-          ),
-        ],
-      ),
-      backgroundColor: AppTheme.surface,
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Hero card
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                  color: AppTheme.primary,
-                  borderRadius: BorderRadius.circular(20)),
-              child: Column(
-                children: [
-                  Container(
-                    width: 64,
-                    height: 64,
-                    decoration: BoxDecoration(
-                      color: const Color(0x1FFFFFFF),
-                      borderRadius: BorderRadius.circular(18),
-                    ),
-                    child: const Icon(Icons.science_outlined, color: Colors.white, size: 34),
-                  ),
-                  const SizedBox(height: 14),
-                  Text(equipment['name'] as String,
-                      style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
-                      textAlign: TextAlign.center),
-                  const SizedBox(height: 4),
-                  Text('${equipment['id']}  ·  ${equipment['cat']}',
-                      style: const TextStyle(color: AppTheme.textLight, fontSize: 13)),
-                  const SizedBox(height: 16),
-                  // Stats row
-                  Row(
-                    children: [
-                      _DetailStat(label: 'Total', value: '$qty'),
-                      _vDivider(),
-                      _DetailStat(label: 'Available', value: '$avail', valueColor: AppTheme.success),
-                      _vDivider(),
-                      _DetailStat(label: 'Borrowed', value: '$borrowed', valueColor: AppTheme.warning),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 20),
-
-            // Details card
-            _SectionDivider(icon: Icons.info_outline_rounded, label: 'Equipment Details', color: AppTheme.primary),
-            const SizedBox(height: 12),
-            _DetailRow(label: 'Equipment ID', value: equipment['id'] as String),
-            _DetailRow(label: 'Category', value: equipment['cat'] as String),
-            _DetailRow(label: 'Total Quantity', value: '$qty units'),
-            _DetailRow(label: 'Available', value: '$avail units'),
-            _DetailRow(label: 'Condition', value: equipment['condition'] as String,
-                valueColor: _condColor(equipment['condition'] as String)),
-            const SizedBox(height: 20),
-
-            // QR Code placeholder
-            _SectionDivider(icon: Icons.qr_code_rounded, label: 'QR Code', color: AppTheme.primary),
-            const SizedBox(height: 12),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                  color: Colors.white, borderRadius: BorderRadius.circular(16)),
-              child: Column(
-                children: [
-                  Container(
-                    width: 140,
-                    height: 140,
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      border: Border.all(color: AppTheme.divider, width: 2),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: CustomPaint(painter: _QrPlaceholderPainter()),
-                  ),
-                  const SizedBox(height: 12),
-                  Text(equipment['id'] as String,
-                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppTheme.textDark)),
-                  const SizedBox(height: 4),
-                  const Text('Scan to identify this equipment',
-                      style: TextStyle(fontSize: 11, color: AppTheme.textMid)),
-                  const SizedBox(height: 14),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: () {},
-                          icon: const Icon(Icons.share_outlined, size: 16),
-                          label: const Text('Share QR'),
-                          style: OutlinedButton.styleFrom(
-                              foregroundColor: AppTheme.primary,
-                              side: const BorderSide(color: AppTheme.primary)),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          onPressed: () {},
-                          icon: const Icon(Icons.print_rounded, size: 16),
-                          label: const Text('Print QR'),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Color _condColor(String c) {
-    switch (c) {
-      case 'Good': return AppTheme.success;
-      case 'Fair': return AppTheme.warning;
-      case 'Under Repair': return AppTheme.danger;
-      default: return AppTheme.textMid;
-    }
-  }
-}
-
-Widget _vDivider() => Container(
-    width: 1, height: 32, color: Colors.white24,
-    margin: const EdgeInsets.symmetric(horizontal: 16));
-
-class _DetailStat extends StatelessWidget {
-  final String label, value;
-  final Color valueColor;
-  const _DetailStat({required this.label, required this.value, this.valueColor = Colors.white});
-  @override
-  Widget build(BuildContext context) {
-    return Expanded(
-      child: Column(
-        children: [
-          Text(value, style: TextStyle(color: valueColor, fontSize: 20, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 2),
-          Text(label, style: const TextStyle(color: AppTheme.textLight, fontSize: 11)),
-        ],
-      ),
-    );
-  }
-}
-
 class _DetailRow extends StatelessWidget {
   final String label, value;
-  final Color? valueColor;
-  const _DetailRow({required this.label, required this.value, this.valueColor});
+  const _DetailRow({required this.label, required this.value});
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -7887,10 +8011,10 @@ class _DetailRow extends StatelessWidget {
           Text(label, style: const TextStyle(fontSize: 13, color: AppTheme.textMid)),
           const Spacer(),
           Text(value,
-              style: TextStyle(
+              style: const TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w600,
-                  color: valueColor ?? AppTheme.textDark)),
+                  color: AppTheme.textDark)),
         ],
       ),
     );
@@ -7954,8 +8078,12 @@ class _EquipmentRegistrationScreenState
   final _locationCtrl = TextEditingController();
   final _qtyCtrl = TextEditingController();
 
+  XFile? _pickedImage;
+  final _imagePicker = ImagePicker();
+
   String? _selectedCategory;
   String? _selectedCondition;
+  final List<String> _selectedCourses = [];
   bool _qrGenerated = false;
   String _generatedId = '';
 
@@ -7996,6 +8124,12 @@ class _EquipmentRegistrationScreenState
     });
   }
 
+  Future<void> _pickImage(ImageSource source) async {
+    final picked = await _imagePicker.pickImage(
+        source: source, imageQuality: 80, maxWidth: 1200);
+    if (picked != null) setState(() => _pickedImage = picked);
+  }
+
   Future<void> _confirmSave() async {
     showDialog(context: context, barrierDismissible: false,
         builder: (_) => const Center(child: CircularProgressIndicator()));
@@ -8004,10 +8138,27 @@ class _EquipmentRegistrationScreenState
         'equipment_name': _nameCtrl.text.trim(),
         'category':       _selectedCategory,
         'location':       _locationCtrl.text.trim(),
+        'courses':        List<String>.from(_selectedCourses),
+        'description':    _descCtrl.text.trim(),
+        'brand':          _brandCtrl.text.trim(),
+        'model':          _modelCtrl.text.trim(),
+        'serial_number':  _serialCtrl.text.trim(),
+        'image_url':      '',
       });
       if (!mounted) return;
-      Navigator.pop(context); // close loading
       if (res['success'] == true) {
+        // Upload image if one was captured
+        if (_pickedImage != null) {
+          final bytes = await _pickedImage!.readAsBytes();
+          final url = await ApiService.uploadEquipmentImage(
+              res['equipment_id'] as String, bytes);
+          if (url != null && url.isNotEmpty) {
+            await ApiService.updateEquipment(
+                res['equipment_id'] as String, {'image_url': url});
+          }
+        }
+        if (!mounted) return;
+        Navigator.pop(context); // close loading
         Navigator.pop(context, {
           'equipment_name': _nameCtrl.text.trim(),
           'qr_code':        res['qr_code'] ?? _generatedId,
@@ -8016,6 +8167,7 @@ class _EquipmentRegistrationScreenState
           'location':       _locationCtrl.text.trim(),
         });
       } else {
+        Navigator.pop(context); // close loading
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(res['message'] ?? 'Failed to save.'), backgroundColor: AppTheme.danger));
       }
@@ -8088,6 +8240,70 @@ class _EquipmentRegistrationScreenState
                 ),
                 const SizedBox(height: 16),
 
+                _FieldLabel('Equipment Photo'),
+                const SizedBox(height: 8),
+                if (_pickedImage != null)
+                  Stack(children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: Image.file(
+                        File(_pickedImage!.path),
+                        height: 160,
+                        width: double.infinity,
+                        fit: BoxFit.cover,
+                      ),
+                    ),
+                    Positioned(
+                      top: 8, right: 8,
+                      child: GestureDetector(
+                        onTap: () => setState(() => _pickedImage = null),
+                        child: Container(
+                          padding: const EdgeInsets.all(4),
+                          decoration: const BoxDecoration(
+                              color: AppTheme.danger, shape: BoxShape.circle),
+                          child: const Icon(Icons.close_rounded,
+                              color: Colors.white, size: 16),
+                        ),
+                      ),
+                    ),
+                  ])
+                else
+                  Container(
+                    height: 120,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: AppTheme.divider),
+                    ),
+                    child: const Center(
+                      child: Column(mainAxisSize: MainAxisSize.min, children: [
+                        Icon(Icons.image_outlined, size: 36, color: AppTheme.textLight),
+                        SizedBox(height: 6),
+                        Text('No photo selected',
+                            style: TextStyle(fontSize: 12, color: AppTheme.textLight)),
+                      ]),
+                    ),
+                  ),
+                const SizedBox(height: 10),
+                Row(children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => _pickImage(ImageSource.camera),
+                      icon: const Icon(Icons.camera_alt_outlined),
+                      label: const Text('Take Photo'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => _pickImage(ImageSource.gallery),
+                      icon: const Icon(Icons.photo_library_outlined),
+                      label: const Text('From Gallery'),
+                    ),
+                  ),
+                ]),
+                const SizedBox(height: 16),
+
                 // Category + Condition side by side
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -8144,6 +8360,28 @@ class _EquipmentRegistrationScreenState
                       ),
                     ),
                   ],
+                ),
+                const SizedBox(height: 16),
+
+                _FieldLabel('Available to Courses (leave empty for all)'),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 6,
+                  children: _kCourses.map((c) {
+                    final selected = _selectedCourses.contains(c);
+                    return FilterChip(
+                      label: Text(c, style: TextStyle(fontSize: 12, color: selected ? Colors.white : AppTheme.textDark)),
+                      selected: selected,
+                      selectedColor: AppTheme.primary,
+                      backgroundColor: AppTheme.surface,
+                      checkmarkColor: Colors.white,
+                      side: BorderSide(color: selected ? AppTheme.primary : AppTheme.divider),
+                      onSelected: (v) => setState(() {
+                        if (v) { _selectedCourses.add(c); } else { _selectedCourses.remove(c); }
+                      }),
+                    );
+                  }).toList(),
                 ),
                 const SizedBox(height: 24),
 
@@ -8500,7 +8738,6 @@ class _AdminReportsScreenState extends State<AdminReportsScreen> {
   int _totalOverdue      = 0;
   int _totalDamage       = 0;
   int _totalEquipment    = 0;
-  int _totalStudents     = 0;
   double _onTimeRate     = 0;
 
   // Most borrowed equipment map: name → count
@@ -8518,29 +8755,6 @@ class _AdminReportsScreenState extends State<AdminReportsScreen> {
   Future<void> _load() async {
     setState(() => _loading = true);
     try {
-      if (Session.isDemoMode) {
-        await Future.delayed(const Duration(milliseconds: 400));
-        setState(() {
-          _totalBorrowings = 47;
-          _totalReturned   = 43;
-          _totalOverdue    = 3;
-          _totalDamage     = 2;
-          _totalEquipment  = 9;
-          _totalStudents   = 12;
-          _onTimeRate      = 91.5;
-          _mostBorrowed    = {
-            'Digital Multimeter': 18,
-            'Breadboard Kit':     14,
-            'Oscilloscope':       11,
-            'Soldering Iron Kit':  8,
-          };
-          _loading = false;
-        });
-        return;
-      }
-
-      // Load from Firebase
-      final stats = await ApiService.getDashboardStats();
       final txSnap = await ApiService.getRequests();
       final eqList = await ApiService.getEquipment();
 
@@ -8576,7 +8790,7 @@ class _AdminReportsScreenState extends State<AdminReportsScreen> {
         _totalBorrowings  = total;
         _totalReturned    = returned;
         _totalOverdue     = overdue;
-        _totalDamage      = stats['damage_reports'] ?? 0;
+        _totalDamage      = 0;
         _totalEquipment   = eqList.length;
         _onTimeRate       = onTime;
         _mostBorrowed     = top4;
