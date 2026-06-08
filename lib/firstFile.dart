@@ -8,7 +8,18 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'firebase_options.dart';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ⚠️ DEMO MODE — set this to `false` before the final defense / production.
+//
+// When true, account sign-up accepts ANY email address (not just @neu.edu.ph)
+// and the email-verification step is skipped, so you can create one demo
+// student per program without real NEU mailboxes. It does NOT affect the
+// Firestore security rules — only these two convenience gates in the app.
+// ─────────────────────────────────────────────────────────────────────────────
+const bool kDemoMode = true;
 
 // ─── Firebase Service ─────────────────────────────────────────────────────────
 class ApiService {
@@ -20,23 +31,27 @@ class ApiService {
       String identifier, String password, String role) async {
     try {
       if (role == 'student') {
-        // Students login with student_number → find their email first
-        final snap = await _db
-            .collection('students')
-            .where('student_number', isEqualTo: identifier)
-            .limit(1)
-            .get();
-        if (snap.docs.isEmpty) {
+        // Students sign in with their student number. Resolve it to an email via
+        // the public lookup index — this works BEFORE authentication, unlike a
+        // query on the protected `students` collection (see firestore.rules).
+        final lookup =
+            await _db.collection('student_lookup').doc(identifier).get();
+        if (!lookup.exists) {
           return {'success': false, 'message': 'Student ID not found.'};
         }
-        final studentData = snap.docs.first.data();
-        final email = studentData['email'] as String;
+        final email = lookup.data()!['email'] as String;
         await _auth.signInWithEmailAndPassword(email: email, password: password);
-        if (_auth.currentUser?.emailVerified != true) {
+        final uid = _auth.currentUser!.uid;
+        if (!kDemoMode && _auth.currentUser?.emailVerified != true) {
           await _auth.signOut();
           return {'success': false, 'message': 'email_not_verified', 'email': email};
         }
-        final user = {...studentData, 'student_id': snap.docs.first.id};
+        final doc = await _db.collection('students').doc(uid).get();
+        if (!doc.exists) {
+          await _auth.signOut();
+          return {'success': false, 'message': 'Student profile not found.'};
+        }
+        final user = {...doc.data()!, 'student_id': uid};
         return {'success': true, 'role': 'student', 'user': user};
       } else {
         // Staff login with email
@@ -65,8 +80,10 @@ class ApiService {
           staffDocId = uid;
         }
 
-        // Admin accounts skip email verification
-        if (staffData['role'] != 'admin' &&
+        // Admin / viewer accounts are provisioned by an administrator and skip
+        // the email-verification gate; regular staff must still verify.
+        final sRole = (staffData['role'] ?? 'staff').toString();
+        if (!kDemoMode && sRole != 'admin' && sRole != 'viewer' &&
             _auth.currentUser?.emailVerified != true) {
           await _auth.signOut();
           return {'success': false, 'message': 'email_not_verified', 'email': identifier};
@@ -110,25 +127,19 @@ class ApiService {
 
       final uid = cred.user!.uid;
 
-      // Send verification email before Firestore write
-      await cred.user!.sendEmailVerification();
+      // Send verification email before Firestore write (skipped in demo mode)
+      if (!kDemoMode) await cred.user!.sendEmailVerification();
 
-      // Step 2: Now authenticated — check student_number uniqueness
+      // Step 2: Enforce student-number uniqueness via the public lookup index
+      // (a single-doc get, which is allowed by the security rules).
+      final lookupRef = _db.collection('student_lookup').doc(studentNumber);
       try {
-        final existing = await _db
-            .collection('students')
-            .where('student_number', isEqualTo: studentNumber)
-            .limit(1)
-            .get();
-        if (existing.docs.isNotEmpty) {
-          // Delete the auth user we just created since student_number is taken
+        final existing = await lookupRef.get();
+        if (existing.exists) {
           await cred.user!.delete();
           return {'success': false, 'message': 'Student ID is already registered.'};
         }
-      } catch (_) {
-        // If the uniqueness check fails, still allow — better to have
-        // a duplicate than block valid registrations
-      }
+      } catch (_) {}
 
       // Step 3: Save student profile to Firestore
       await _db.collection('students').doc(uid).set({
@@ -137,10 +148,16 @@ class ApiService {
         'student_number': studentNumber,
         'course':         data['course'] ?? '',
         'year_level':     data['year_level'] ?? 1,
+        'hold':           false,
+        'hold_reason':    '',
         'created_at':     FieldValue.serverTimestamp(),
       });
 
-      // Step 4: Sign out after registration so they go back to login screen
+      // Step 4: Write the public lookup (student_number → email + uid) so the
+      // student can later sign in using only their student number.
+      await lookupRef.set({'email': email, 'uid': uid});
+
+      // Step 5: Sign out after registration so they go back to login screen
       await _auth.signOut();
 
       return {
@@ -206,6 +223,24 @@ class ApiService {
     }
   }
 
+  // Send a Firebase password-reset email.
+  static Future<Map<String, dynamic>> sendPasswordReset(String email) async {
+    try {
+      await _auth.sendPasswordResetEmail(email: email.trim());
+      return {'success': true};
+    } on FirebaseAuthException catch (e) {
+      if (e.code == 'user-not-found') {
+        return {'success': false, 'message': 'No account found for that email.'};
+      }
+      if (e.code == 'invalid-email') {
+        return {'success': false, 'message': 'Please enter a valid email address.'};
+      }
+      return {'success': false, 'message': e.message ?? 'Could not send reset email.'};
+    } catch (e) {
+      return {'success': false, 'message': e.toString()};
+    }
+  }
+
   // ── Equipment ─────────────────────────────────────────────────────────────
   static Future<List<dynamic>> getEquipment(
       {String search = '', String category = ''}) async {
@@ -247,10 +282,14 @@ class ApiService {
       final name     = data['equipment_name'] as String;
       final category = data['category'] as String;
       final location = data['location'] ?? '';
-      // Auto-generate QR code
-      final prefix  = category.substring(0, 3).toUpperCase();
+      // Use a caller-supplied QR code when present so the code previewed during
+      // registration matches what is stored; otherwise auto-generate one.
+      final provided = (data['qr_code'] as String?)?.trim() ?? '';
+      final prefix  = category.length >= 3
+          ? category.substring(0, 3).toUpperCase()
+          : category.toUpperCase();
       final suffix  = DateTime.now().millisecondsSinceEpoch.toString().substring(7);
-      final qrCode  = '$prefix-$suffix';
+      final qrCode  = provided.isNotEmpty ? provided : '$prefix-$suffix';
       final ref = await _db.collection('equipment').add({
         'equipment_name': name,
         'category':       category,
@@ -286,6 +325,38 @@ class ApiService {
     }
   }
 
+  // Permanently remove an equipment record. Blocked while the item is on an
+  // active loan so history stays consistent. Completes the CRUD "Delete".
+  static Future<Map<String, dynamic>> deleteEquipment(String equipmentId) async {
+    try {
+      final txSnap = await _db
+          .collection('borrow_transactions')
+          .where('equipment_id', isEqualTo: equipmentId)
+          .get();
+      final hasActive = txSnap.docs.any((d) {
+        final s = d.data()['status'];
+        return s == 'Approved' || s == 'Pending';
+      });
+      if (hasActive) {
+        return {
+          'success': false,
+          'message': 'Cannot delete: this equipment has a pending or active loan.'
+        };
+      }
+      await _db.collection('equipment').doc(equipmentId).delete();
+      // Best-effort cleanup of the stored image; ignore if missing.
+      try {
+        await FirebaseStorage.instance
+            .ref()
+            .child('equipment_images/$equipmentId.jpg')
+            .delete();
+      } catch (_) {}
+      return {'success': true, 'message': 'Equipment deleted.'};
+    } catch (e) {
+      return {'success': false, 'message': e.toString()};
+    }
+  }
+
   static Future<String?> uploadEquipmentImage(
       String equipmentId, Uint8List bytes) async {
     try {
@@ -304,21 +375,51 @@ class ApiService {
       Map<String, dynamic> data) async {
     try {
       final equipId = data['equipment_id'].toString();
+      final sid     = data['student_id'].toString();
+
+      // ── Penalty / hold gate (Prof recommendation #3) ──
+      // A student on hold (overdue or staff-imposed penalty) cannot borrow.
+      if (sid.isNotEmpty) {
+        final stuDoc = await _db.collection('students').doc(sid).get();
+        if (stuDoc.exists && stuDoc.data()?['hold'] == true) {
+          return {
+            'success': false,
+            'on_hold': true,
+            'message': (stuDoc.data()?['hold_reason'] ?? '').toString().isNotEmpty
+                ? stuDoc.data()!['hold_reason']
+                : 'Your borrowing privileges are on hold. Please settle the '
+                    'penalty with the laboratory staff before borrowing again.',
+          };
+        }
+      }
+
       // Check equipment is Available
       final eqDoc = await _db.collection('equipment').doc(equipId).get();
-      if (!eqDoc.exists)
+      if (!eqDoc.exists) {
         return {'success': false, 'message': 'Equipment not found.'};
+      }
       final eqData = eqDoc.data() as Map<String, dynamic>;
-      if (eqData['status'] != 'Available')
+      if (eqData['status'] != 'Available') {
         return {
           'success': false,
           'message': 'Equipment is currently ${eqData['status']}.'
         };
+      }
 
-      final due = DateTime.now();
-      final dueDate = DateTime(due.year, due.month, due.day, 17, 0, 0);
+      // Honour the student's requested return time, enforcing the same-day
+      // 5:00 PM laboratory policy as the latest possible deadline.
+      final now = DateTime.now();
+      final reqDue = DateTime.tryParse('${data['due_date'] ?? ''}');
+      final DateTime dueDate;
+      if (reqDue != null &&
+          !(reqDue.hour > 17 || (reqDue.hour == 17 && reqDue.minute > 0))) {
+        dueDate = DateTime(now.year, now.month, now.day, reqDue.hour, reqDue.minute, 0);
+      } else {
+        dueDate = DateTime(now.year, now.month, now.day, 17, 0, 0);
+      }
+
       final ref = await _db.collection('borrow_transactions').add({
-        'student_id':     data['student_id'].toString(),
+        'student_id':     sid,
         'equipment_id':   equipId,
         'equipment_name': eqData['equipment_name'],
         'qr_code':        eqData['qr_code'],
@@ -342,27 +443,80 @@ class ApiService {
     }
   }
 
+  // Equipment status to set when an item is returned in a given condition.
+  static String _equipmentStatusForCondition(String condition) {
+    switch (condition) {
+      case 'Damaged':
+      case 'Under Repair':
+        return 'Under Repair';
+      case 'For Disposal':
+        return 'For Disposal';
+      default:
+        return 'Available';
+    }
+  }
+
+  // Return a loan by its transaction id. Runs in a Firestore transaction so the
+  // transaction record and the equipment status are updated atomically.
   static Future<Map<String, dynamic>> returnEquipment(
       dynamic transactionId, String condition) async {
     try {
-      final txDoc =
-          await _db.collection('borrow_transactions').doc('$transactionId').get();
-      if (!txDoc.exists)
-        return {'success': false, 'message': 'Transaction not found.'};
-      final equipId =
-          (txDoc.data() as Map<String, dynamic>)['equipment_id'] as String;
-      // Update transaction
-      await _db.collection('borrow_transactions').doc('$transactionId').update({
-        'status':             'Returned',
-        'return_date':        FieldValue.serverTimestamp(),
-        'condition_returned': condition,
+      final txRef = _db.collection('borrow_transactions').doc('$transactionId');
+      return await _db.runTransaction((tx) async {
+        final txDoc = await tx.get(txRef);
+        if (!txDoc.exists) {
+          return {'success': false, 'message': 'Transaction not found.'};
+        }
+        final data = txDoc.data() as Map<String, dynamic>;
+        if (data['status'] == 'Returned') {
+          return {'success': false, 'message': 'This item was already returned.'};
+        }
+        final equipId = data['equipment_id'] as String;
+        tx.update(txRef, {
+          'status':             'Returned',
+          'return_date':        FieldValue.serverTimestamp(),
+          'condition_returned': condition,
+        });
+        tx.update(_db.collection('equipment').doc(equipId),
+            {'status': _equipmentStatusForCondition(condition)});
+        return {'success': true, 'message': 'Equipment returned successfully.'};
       });
-      // Update equipment back to Available
-      await _db
-          .collection('equipment')
-          .doc(equipId)
-          .update({'status': 'Available'});
-      return {'success': true, 'message': 'Equipment returned successfully.'};
+    } catch (e) {
+      return {'success': false, 'message': e.toString()};
+    }
+  }
+
+  // Return a loan by scanning the equipment's QR code. Looks up the active
+  // (Approved) loan for that equipment, then returns it atomically. This is the
+  // flagship staff return workflow — previously it passed an equipment id to
+  // returnEquipment (which expects a transaction id) and silently failed.
+  static Future<Map<String, dynamic>> returnEquipmentByQr(
+      String equipmentId, String condition) async {
+    try {
+      // Single-field query (no composite index needed); filter in Dart.
+      final snap = await _db
+          .collection('borrow_transactions')
+          .where('equipment_id', isEqualTo: equipmentId)
+          .get();
+      final active = snap.docs
+          .where((d) => (d.data())['status'] == 'Approved')
+          .toList();
+      if (active.isEmpty) {
+        return {
+          'success': false,
+          'message': 'No active loan found for this equipment.'
+        };
+      }
+      final activeDoc = active.first;
+      final result = await returnEquipment(activeDoc.id, condition);
+      if (result['success'] == true) {
+        final d = activeDoc.data();
+        result['student_id']     = d['student_id'] ?? '';
+        result['borrower_name']  = d['borrower_name'] ?? d['student_number'] ?? '';
+        result['student_number'] = d['student_number'] ?? '';
+        result['transaction_id'] = activeDoc.id;
+      }
+      return result;
     } catch (e) {
       return {'success': false, 'message': e.toString()};
     }
@@ -439,33 +593,45 @@ class ApiService {
     return results;
   }
 
+  // Approve or reject a borrow request. Runs in a transaction so that, on
+  // approval, the equipment is only locked to Borrowed if it is still Available
+  // — preventing two staff from approving the same item (double-booking).
   static Future<Map<String, dynamic>> updateRequestStatus(
-      dynamic transactionId, String action) async {
+      dynamic transactionId, String action, {String reason = ''}) async {
     try {
-      final txDoc =
-          await _db.collection('borrow_transactions').doc('$transactionId').get();
-      if (!txDoc.exists)
-        return {'success': false, 'message': 'Transaction not found.'};
-      final equipId =
-          (txDoc.data() as Map<String, dynamic>)['equipment_id'] as String;
+      final txRef = _db.collection('borrow_transactions').doc('$transactionId');
+      return await _db.runTransaction((tx) async {
+        final txDoc = await tx.get(txRef);
+        if (!txDoc.exists) {
+          return {'success': false, 'message': 'Transaction not found.'};
+        }
+        final equipId =
+            (txDoc.data() as Map<String, dynamic>)['equipment_id'] as String;
+        final eqRef = _db.collection('equipment').doc(equipId);
 
-      if (action == 'approve') {
-        await _db
-            .collection('borrow_transactions')
-            .doc('$transactionId')
-            .update({'status': 'Approved'});
-        await _db
-            .collection('equipment')
-            .doc(equipId)
-            .update({'status': 'Borrowed'});
-        return {'success': true, 'message': 'Request approved.'};
-      } else {
-        await _db
-            .collection('borrow_transactions')
-            .doc('$transactionId')
-            .update({'status': 'Rejected'});
-        return {'success': true, 'message': 'Request rejected.'};
-      }
+        if (action == 'approve') {
+          final eqDoc = await tx.get(eqRef);
+          final eqStatus = eqDoc.exists
+              ? (eqDoc.data() as Map<String, dynamic>)['status']
+              : null;
+          if (eqStatus != 'Available') {
+            return {
+              'success': false,
+              'message':
+                  'Equipment is no longer available (${eqStatus ?? 'missing'}).'
+            };
+          }
+          tx.update(txRef, {'status': 'Approved'});
+          tx.update(eqRef, {'status': 'Borrowed'});
+          return {'success': true, 'message': 'Request approved.'};
+        } else {
+          tx.update(txRef, {
+            'status': 'Rejected',
+            if (reason.trim().isNotEmpty) 'reject_reason': reason.trim(),
+          });
+          return {'success': true, 'message': 'Request rejected.'};
+        }
+      });
     } catch (e) {
       return {'success': false, 'message': e.toString()};
     }
@@ -477,6 +643,7 @@ class ApiService {
     try {
       final ref = await _db.collection('damage_reports').add({
         ...data,
+        'status':      'Open',
         'reported_at': FieldValue.serverTimestamp(),
       });
       return {
@@ -487,6 +654,92 @@ class ApiService {
     } catch (e) {
       return {'success': false, 'message': e.toString()};
     }
+  }
+
+  // Fetch damage reports for staff review (newest first). Sorted in Dart to
+  // avoid requiring a composite index.
+  static Future<List<dynamic>> getDamageReports({String status = ''}) async {
+    final snap = await _db.collection('damage_reports').get();
+    final results = snap.docs.map((d) {
+      final data = d.data();
+      return {
+        ...data,
+        'report_id': d.id,
+        'reported_at': (data['reported_at'] as Timestamp?)
+                ?.toDate()
+                .toIso8601String() ??
+            '',
+      };
+    }).where((r) {
+      if (status.isEmpty || status == 'All') return true;
+      return (r['status'] ?? 'Open') == status;
+    }).toList();
+    results.sort((a, b) {
+      final ad = DateTime.tryParse('${a['reported_at']}') ?? DateTime(2000);
+      final bd = DateTime.tryParse('${b['reported_at']}') ?? DateTime(2000);
+      return bd.compareTo(ad);
+    });
+    return results;
+  }
+
+  // Number of damage reports still needing attention (status == Open).
+  static Future<int> openDamageReportCount() async {
+    final snap = await _db.collection('damage_reports').get();
+    return snap.docs
+        .where((d) => (d.data()['status'] ?? 'Open') == 'Open')
+        .length;
+  }
+
+  // Update a damage report's triage status (Open → Reviewed / Resolved) and
+  // optionally set the related equipment's condition in the same pass.
+  static Future<Map<String, dynamic>> updateDamageReport(
+      String reportId, String status, {String? equipmentId, String? equipmentStatus}) async {
+    try {
+      await _db.collection('damage_reports').doc(reportId).update({
+        'status': status,
+        'reviewed_at': FieldValue.serverTimestamp(),
+      });
+      if (equipmentId != null && equipmentId.isNotEmpty && equipmentStatus != null) {
+        await _db.collection('equipment').doc(equipmentId)
+            .update({'status': equipmentStatus});
+      }
+      return {'success': true};
+    } catch (e) {
+      return {'success': false, 'message': e.toString()};
+    }
+  }
+
+  // ── Borrowing holds / penalties (Prof recommendation #3) ────────────────────
+  // Place or lift a hold on a student. While on hold, the student cannot submit
+  // new borrow requests and sees a penalty alert.
+  static Future<Map<String, dynamic>> setStudentHold(
+      String studentId, bool hold, {String reason = ''}) async {
+    try {
+      await _db.collection('students').doc(studentId).update({
+        'hold': hold,
+        'hold_reason': hold ? reason : '',
+        'hold_at': hold ? FieldValue.serverTimestamp() : null,
+      });
+      return {'success': true};
+    } catch (e) {
+      return {'success': false, 'message': e.toString()};
+    }
+  }
+
+  // Students currently under a staff-imposed hold.
+  static Future<List<dynamic>> getHeldStudents() async {
+    final snap = await _db
+        .collection('students')
+        .where('hold', isEqualTo: true)
+        .get();
+    return snap.docs.map((d) => {...d.data(), 'student_id': d.id}).toList();
+  }
+
+  // Re-read a single student profile (used to refresh the live hold flag).
+  static Future<Map<String, dynamic>?> getStudent(String studentId) async {
+    final doc = await _db.collection('students').doc(studentId).get();
+    if (!doc.exists) return null;
+    return {...doc.data()!, 'student_id': doc.id};
   }
 
   // ── Update Profile ────────────────────────────────────────────────────────
@@ -509,9 +762,22 @@ class ApiService {
   }
 }
 
-// ─── Session (simple in-memory user state) ───────────────────────────────────
+// ─── Shared constants ─────────────────────────────────────────────────────────
+// Engineering programs/courses offered by CEA. Equipment can be tagged with the
+// programs allowed to borrow it (Prof recommendation #1 — categorize by program).
 const _kCourses = ['CE', 'ME', 'ECE', 'EE', 'Arch', 'EnSci', 'IE', 'Astronomy'];
 
+// Equipment categories — single source of truth shared by the catalog, inventory
+// filter, registration and edit screens so the lists never drift apart.
+const _kCategories = [
+  'Electronics', 'Optics', 'Measurement', 'Tools',
+  'Microcontroller', 'Safety', 'Other',
+];
+
+// Equipment availability / condition statuses.
+const _kStatuses = ['Available', 'Borrowed', 'Under Repair', 'For Disposal'];
+
+// ─── Session (simple in-memory user state) ───────────────────────────────────
 class Session {
   static Map<String, dynamic>? currentUser;
   static String? role; // 'student' or 'staff'
@@ -535,6 +801,21 @@ class Session {
     if (parts.length >= 2) return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
     return name.isNotEmpty ? name[0].toUpperCase() : 'U';
   }
+
+  // ── Staff permission level ──────────────────────────────────────────────────
+  // A staff account's `role` field is one of: 'admin', 'staff', or 'viewer'.
+  // Viewers (e.g. the Supervising Minister) can see everything but cannot make
+  // changes (Prof recommendation #2 — view-only admin).
+  static String get staffRole => (currentUser?['role'] ?? 'staff').toString();
+  static bool get isViewer => role == 'staff' && staffRole == 'viewer';
+  static bool get isAdmin  => role == 'staff' && staffRole == 'admin';
+  // Whether the current user may perform write actions in the staff portal.
+  static bool get canManage => role == 'staff' && staffRole != 'viewer';
+
+  // ── Borrowing hold / penalty (students) ────────────────────────────────────
+  static bool get isOnHold => currentUser?['hold'] == true;
+  static String get holdReason =>
+      (currentUser?['hold_reason'] ?? '').toString();
 }
 
 void main() async {
@@ -762,9 +1043,9 @@ class StatusBadge extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.13),
+        color: color.withValues(alpha: 0.13),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withOpacity(0.4)),
+        border: Border.all(color: color.withValues(alpha: 0.4)),
       ),
       child: Text(
         label,
@@ -831,43 +1112,63 @@ class _SplashScreenState extends State<SplashScreen>
     Future.delayed(const Duration(seconds: 2), _checkSession);
   }
 
+  void _goLogin() {
+    if (!mounted) return;
+    Navigator.pushReplacement(
+        context, MaterialPageRoute(builder: (_) => const LoginScreen()));
+  }
+
   Future<void> _checkSession() async {
     if (!mounted) return;
-    final firebaseUser = FirebaseAuth.instance.currentUser;
+    try {
+      final firebaseUser = FirebaseAuth.instance.currentUser;
 
-    // No active session — go to login as before
-    if (firebaseUser == null) {
-      Navigator.pushReplacement(
-          context, MaterialPageRoute(builder: (_) => const LoginScreen()));
-      return;
-    }
+      // Respect the "Remember me" choice. If it was off (or there's no session),
+      // go straight to login — and sign out any lingering session so it isn't
+      // silently restored.
+      final prefs = await SharedPreferences.getInstance();
+      final remember = prefs.getBool('remember_me') ?? true;
+      if (firebaseUser == null || !remember) {
+        if (firebaseUser != null && !remember) {
+          await FirebaseAuth.instance.signOut();
+        }
+        _goLogin();
+        return;
+      }
 
-    final uid = firebaseUser.uid;
-    final db  = FirebaseFirestore.instance;
+      final uid = firebaseUser.uid;
+      final db  = FirebaseFirestore.instance;
+      const limit = Duration(seconds: 8); // never hang on the splash
 
-    // Try to restore as student
-    final studentDoc = await db.collection('students').doc(uid).get();
-    if (studentDoc.exists && mounted) {
-      Session.set({...studentDoc.data()!, 'student_id': uid}, 'student');
-      Navigator.pushReplacement(context,
-          MaterialPageRoute(builder: (_) => const StudentHomeScreen()));
-      return;
-    }
+      // Try to restore as student
+      final studentDoc =
+          await db.collection('students').doc(uid).get().timeout(limit);
+      if (!mounted) return;
+      if (studentDoc.exists) {
+        Session.set({...studentDoc.data()!, 'student_id': uid}, 'student');
+        Navigator.pushReplacement(context,
+            MaterialPageRoute(builder: (_) => const StudentHomeScreen()));
+        return;
+      }
 
-    // Try to restore as staff
-    final staffDoc = await db.collection('staff').doc(uid).get();
-    if (staffDoc.exists && mounted) {
-      Session.set({...staffDoc.data()!, 'staff_id': uid}, 'staff');
-      Navigator.pushReplacement(context,
-          MaterialPageRoute(builder: (_) => const AdminDashboardScreen()));
-      return;
-    }
+      // Try to restore as staff
+      final staffDoc =
+          await db.collection('staff').doc(uid).get().timeout(limit);
+      if (!mounted) return;
+      if (staffDoc.exists) {
+        Session.set({...staffDoc.data()!, 'staff_id': uid}, 'staff');
+        Navigator.pushReplacement(context,
+            MaterialPageRoute(builder: (_) => const AdminDashboardScreen()));
+        return;
+      }
 
-    // Auth token exists but no Firestore profile — sign out cleanly
-    await FirebaseAuth.instance.signOut();
-    if (mounted) {
-      Navigator.pushReplacement(
-          context, MaterialPageRoute(builder: (_) => const LoginScreen()));
+      // Auth token exists but no Firestore profile — sign out cleanly.
+      await FirebaseAuth.instance.signOut();
+      _goLogin();
+    } catch (_) {
+      // Any failure (offline, timeout, permission, etc.) → fall back to login
+      // so the app never gets stuck on the splash screen.
+      _goLogin();
     }
   }
 
@@ -968,8 +1269,48 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _isStudent = true;
   bool _obscure = true;
   bool _loading = false;
+  bool _rememberMe = true;
   final _identifierCtrl = TextEditingController();
   final _passwordCtrl   = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _loadRemembered();
+  }
+
+  // Restore the "remember me" choice and the saved identifier (never the
+  // password) so a returning user finds their student number / email pre-filled.
+  Future<void> _loadRemembered() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final remember = prefs.getBool('remember_me') ?? true;
+      final savedId  = prefs.getString('saved_identifier') ?? '';
+      final savedIsStudent = prefs.getBool('saved_is_student') ?? true;
+      if (!mounted) return;
+      setState(() {
+        _rememberMe = remember;
+        if (remember && savedId.isNotEmpty) {
+          _isStudent = savedIsStudent;
+          _identifierCtrl.text = savedId;
+        }
+      });
+    } catch (_) {/* ignore — just start with defaults */}
+  }
+
+  Future<void> _saveRemembered(String identifier) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('remember_me', _rememberMe);
+      if (_rememberMe) {
+        await prefs.setString('saved_identifier', identifier);
+        await prefs.setBool('saved_is_student', _isStudent);
+      } else {
+        await prefs.remove('saved_identifier');
+        await prefs.remove('saved_is_student');
+      }
+    } catch (_) {/* non-fatal */}
+  }
 
   @override
   void dispose() {
@@ -988,6 +1329,54 @@ class _LoginScreenState extends State<LoginScreen> {
     });
   }
 
+  Future<void> _forgotPassword() async {
+    final emailCtrl = TextEditingController(
+        text: _isStudent ? '' : _identifierCtrl.text.trim());
+    final email = await showDialog<String>(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Reset Password'),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Text(
+            'Enter your registered email address and we will send you a link '
+            'to reset your password.',
+            style: TextStyle(fontSize: 13, color: AppTheme.textMid, height: 1.5),
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: emailCtrl,
+            keyboardType: TextInputType.emailAddress,
+            autofocus: true,
+            decoration: const InputDecoration(
+              hintText: 'name@neu.edu.ph',
+              prefixIcon: Icon(Icons.email_outlined, color: AppTheme.textMid),
+            ),
+          ),
+        ]),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(dialogCtx),
+              child: const Text('Cancel', style: TextStyle(color: AppTheme.textMid))),
+          ElevatedButton(
+              onPressed: () => Navigator.pop(dialogCtx, emailCtrl.text.trim()),
+              child: const Text('Send Link')),
+        ],
+      ),
+    );
+    if (email == null || email.isEmpty || !mounted) return;
+    final res = await ApiService.sendPasswordReset(email);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(res['success'] == true
+          ? 'Password reset link sent to $email. Check your inbox and spam folder.'
+          : (res['message'] ?? 'Could not send reset email.')),
+      backgroundColor:
+          res['success'] == true ? AppTheme.success : AppTheme.danger,
+      behavior: SnackBarBehavior.floating,
+    ));
+  }
+
   Future<void> _login() async {
     final id = _identifierCtrl.text.trim();
     final pw = _passwordCtrl.text.trim();
@@ -1001,6 +1390,7 @@ class _LoginScreenState extends State<LoginScreen> {
       final res = await ApiService.login(id, pw, _isStudent ? 'student' : 'staff');
       if (!mounted) return;
       if (res['success'] == true) {
+        await _saveRemembered(id);
         Session.set(res['user'] as Map<String, dynamic>, res['role'] as String);
         Navigator.pushReplacement(context, MaterialPageRoute(
           builder: (_) => _isStudent ? const StudentHomeScreen() : const AdminDashboardScreen()));
@@ -1236,13 +1626,43 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                       ),
                       const SizedBox(height: 8),
-                      Align(
-                        alignment: Alignment.centerRight,
-                        child: Text('Forgot password?',
-                            style: const TextStyle(
-                                color: AppTheme.accent,
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600)),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          // Remember me
+                          GestureDetector(
+                            onTap: () => setState(() => _rememberMe = !_rememberMe),
+                            child: Row(mainAxisSize: MainAxisSize.min, children: [
+                              SizedBox(
+                                width: 22, height: 22,
+                                child: Checkbox(
+                                  value: _rememberMe,
+                                  onChanged: (v) =>
+                                      setState(() => _rememberMe = v ?? true),
+                                  activeColor: AppTheme.primary,
+                                  materialTapTargetSize:
+                                      MaterialTapTargetSize.shrinkWrap,
+                                  visualDensity: VisualDensity.compact,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              const Text('Remember me',
+                                  style: TextStyle(
+                                      fontSize: 13,
+                                      color: AppTheme.textMid,
+                                      fontWeight: FontWeight.w500)),
+                            ]),
+                          ),
+                          // Forgot password
+                          GestureDetector(
+                            onTap: _forgotPassword,
+                            child: const Text('Forgot password?',
+                                style: TextStyle(
+                                    color: AppTheme.accent,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600)),
+                          ),
+                        ],
                       ),
                       const SizedBox(height: 28),
                       SizedBox(
@@ -1633,19 +2053,20 @@ class _SignUpScreenState extends State<SignUpScreen> {
   bool _agreedToTerms = false;
 
   // Live email validation state
-  bool get _emailValid =>
-      RegExp(r'^[a-zA-Z0-9._%+\-]+@neu\.edu\.ph$')
+  bool get _emailValid => kDemoMode
+      ? _emailCtrl.text.trim().contains('@')
+      : RegExp(r'^[a-zA-Z0-9._%+\-]+@neu\.edu\.ph$')
           .hasMatch(_emailCtrl.text.trim());
 
   // Live student ID validation (##-#####-### format)
   bool get _idValid =>
       RegExp(r'^\d{2}-\d{5}-\d{3}$').hasMatch(_studentIdCtrl.text.trim());
 
-  // Validate: must be NEU email domain only
+  // Validate: must be NEU email domain only (relaxed in demo mode)
   String? _validateEmail(String? val) {
     if (val == null || val.trim().isEmpty) return 'Email is required';
     if (!val.trim().contains('@')) return 'Enter a valid email address';
-    if (!val.trim().toLowerCase().endsWith('@neu.edu.ph')) {
+    if (!kDemoMode && !val.trim().toLowerCase().endsWith('@neu.edu.ph')) {
       return 'Must be an official NEU email (@neu.edu.ph)';
     }
     return null;
@@ -1713,7 +2134,9 @@ class _SignUpScreenState extends State<SignUpScreen> {
                 const SizedBox(height: 20),
                 const Text('Account Created!', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: AppTheme.textDark)),
                 const SizedBox(height: 10),
-                Text('Welcome, ${_firstNameCtrl.text}! A verification link has been sent to ${_emailCtrl.text.trim()}. Please check your inbox and verify your email before signing in.',
+                Text(kDemoMode
+                        ? 'Welcome, ${_firstNameCtrl.text}! Your account is ready — you can sign in now with your student number and password.'
+                        : 'Welcome, ${_firstNameCtrl.text}! A verification link has been sent to ${_emailCtrl.text.trim()}. Please check your inbox and verify your email before signing in.',
                     textAlign: TextAlign.center, style: const TextStyle(fontSize: 13, color: AppTheme.textMid)),
                 const SizedBox(height: 24),
                 SizedBox(width: double.infinity,
@@ -1730,7 +2153,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
         if (mounted) {
           Navigator.pop(context);
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Cannot connect to server. Check your IP and Laragon.'), backgroundColor: AppTheme.danger));
+            const SnackBar(content: Text('Could not create the account. Check your internet connection and try again.'), backgroundColor: AppTheme.danger));
         }
       }
     }
@@ -2438,6 +2861,16 @@ class _StudentDashboardState extends State<_StudentDashboard> {
         studentId: Session.studentId,
         studentNumber: Session.studentNumber,
       );
+      // Refresh the live hold/penalty flag so the banner stays current even if
+      // staff placed a hold during this session.
+      final sid = Session.currentUser?['student_id']?.toString() ?? '';
+      if (sid.isNotEmpty) {
+        final fresh = await ApiService.getStudent(sid);
+        if (fresh != null && Session.currentUser != null) {
+          Session.currentUser!['hold'] = fresh['hold'] ?? false;
+          Session.currentUser!['hold_reason'] = fresh['hold_reason'] ?? '';
+        }
+      }
       setState(() { _allLoans = loans; _loading = false; });
     } catch (_) {
       setState(() => _loading = false);
@@ -2640,7 +3073,7 @@ class _StudentDashboardState extends State<_StudentDashboard> {
                                   CircleAvatar(
                                     radius: 12,
                                     backgroundColor: const Color(0xFFF5A623)
-                                        .withOpacity(0.25),
+                                        .withValues(alpha: 0.25),
                                     child: Text(Session.initials,
                                       style: const TextStyle(
                                         color: Color(0xFFF5A623),
@@ -2713,6 +3146,53 @@ class _StudentDashboardState extends State<_StudentDashboard> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+
+                      // ── Penalty / Hold banner (Prof recommendation #3) ──
+                      if (Session.isOnHold || _overdue > 0) ...[
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(14),
+                          margin: const EdgeInsets.only(bottom: 16),
+                          decoration: BoxDecoration(
+                            color: const Color(0x1AE74C3C),
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(
+                                color: AppTheme.danger.withValues(alpha: 0.4)),
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Icon(Icons.gpp_bad_rounded,
+                                  color: AppTheme.danger, size: 22),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text('Borrowing on Hold',
+                                        style: TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 14,
+                                            color: AppTheme.danger)),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      Session.isOnHold && Session.holdReason.isNotEmpty
+                                          ? Session.holdReason
+                                          : 'You have overdue equipment. Please return it and '
+                                              'settle any penalty with the laboratory staff '
+                                              'before borrowing again.',
+                                      style: const TextStyle(
+                                          fontSize: 12,
+                                          color: AppTheme.textDark,
+                                          height: 1.4),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
 
                       // ── Alerts / Notifications ──────────────────────────
                       if (_notifications.isNotEmpty) ...[
@@ -2975,7 +3455,7 @@ class _ActionTile extends StatelessWidget {
                 colors: gradient),
             borderRadius: BorderRadius.circular(16),
             boxShadow: [BoxShadow(
-                color: gradient.last.withOpacity(0.3),
+                color: gradient.last.withValues(alpha: 0.3),
                 blurRadius: 8, offset: const Offset(0, 4))],
           ),
           child: Column(
@@ -3016,7 +3496,7 @@ class _LoanItemCard extends StatelessWidget {
         Container(
           width: 42, height: 42,
           decoration: BoxDecoration(
-              color: statusColor.withOpacity(0.1),
+              color: statusColor.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(12)),
           child: Icon(icon, color: statusColor, size: 20)),
         const SizedBox(width: 12),
@@ -3036,7 +3516,7 @@ class _LoanItemCard extends StatelessWidget {
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
           decoration: BoxDecoration(
-              color: statusColor.withOpacity(0.1),
+              color: statusColor.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(20)),
           child: Text(status, style: TextStyle(
               fontSize: 11, fontWeight: FontWeight.bold,
@@ -3086,7 +3566,7 @@ class EquipmentCatalogScreen extends StatefulWidget {
 class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
   String _search = '';
   final Set<String> _selectedCategories = {};
-  final _categories = ['Electronics', 'Optics', 'Measurement', 'Tools', 'Microcontroller'];
+  final _categories = _kCategories;
   bool _dropdownOpen = false;
   bool _showAllCourses = false;
   bool _loading = true;
@@ -3177,7 +3657,7 @@ class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
                       const Text('Failed to load equipment',
                           style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppTheme.textDark)),
                       const SizedBox(height: 8),
-                      const Text('Check your connection and make sure Laragon is running.',
+                      const Text('Check your internet connection and try again.',
                           textAlign: TextAlign.center,
                           style: TextStyle(fontSize: 13, color: AppTheme.textMid)),
                       const SizedBox(height: 20),
@@ -3492,7 +3972,7 @@ class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
                   const SizedBox(width: 6),
                   Text(
                     _showAllCourses
-                        ? 'Showing all courses'
+                        ? 'Showing all programs'
                         : 'Showing equipment for ${Session.course}',
                     style: const TextStyle(fontSize: 12, color: AppTheme.primary, fontWeight: FontWeight.w600),
                   ),
@@ -3500,7 +3980,7 @@ class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
                   GestureDetector(
                     onTap: () => setState(() => _showAllCourses = !_showAllCourses),
                     child: Text(
-                      _showAllCourses ? 'My course only' : 'Show all',
+                      _showAllCourses ? 'My program only' : 'Show all',
                       style: const TextStyle(fontSize: 12, color: AppTheme.accent, fontWeight: FontWeight.w600),
                     ),
                   ),
@@ -3512,7 +3992,7 @@ class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
               padding: const EdgeInsets.all(16),
               cacheExtent: 500,
               itemCount: filtered.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 10),
+              separatorBuilder: (_, _) => const SizedBox(height: 10),
               itemBuilder: (_, i) {
                 final e = filtered[i];
                 final isAvailable = (e['status'] ?? 'Available') == 'Available';
@@ -3580,6 +4060,24 @@ class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
                                   ],
                                 ],
                               ),
+                              if (((e['courses'] as List?)?.isNotEmpty ?? false)) ...[
+                                const SizedBox(height: 6),
+                                Row(children: [
+                                  const Icon(Icons.school_outlined,
+                                      size: 12, color: AppTheme.primary),
+                                  const SizedBox(width: 4),
+                                  Expanded(
+                                    child: Text(
+                                      'For: ${(e['courses'] as List).join(', ')}',
+                                      style: const TextStyle(
+                                          fontSize: 11,
+                                          color: AppTheme.primary,
+                                          fontWeight: FontWeight.w600),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ]),
+                              ],
                             ],
                           ),
                         ),
@@ -4037,7 +4535,7 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
                         : ListView.separated(
                             padding: const EdgeInsets.all(16),
                             itemCount: items.length,
-                            separatorBuilder: (_, __) => const SizedBox(height: 8),
+                            separatorBuilder: (_, _) => const SizedBox(height: 8),
                             itemBuilder: (_, i) {
                               final e = items[i];
                               final isSelected = _selectedEquipmentId ==
@@ -4118,6 +4616,27 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
             behavior: SnackBarBehavior.floating));
       return;
     }
+    if (Session.isOnHold) {
+      showDialog(
+        context: context,
+        builder: (_) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          icon: const Icon(Icons.gpp_bad_rounded, color: AppTheme.danger, size: 48),
+          title: const Text('Borrowing on Hold'),
+          content: Text(
+              Session.holdReason.isNotEmpty
+                  ? Session.holdReason
+                  : 'Your borrowing privileges are on hold. Please see the '
+                      'laboratory staff to settle the penalty.',
+              textAlign: TextAlign.center),
+          actions: [
+            ElevatedButton(
+                onPressed: () => Navigator.pop(context), child: const Text('OK'))
+          ],
+        ),
+      );
+      return;
+    }
     setState(() => _loading = true);
     try {
       final res = await ApiService.borrowEquipment({
@@ -4190,7 +4709,7 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
                     border: Border.all(
                         color: _selectedEquipmentId.isEmpty
                             ? const Color(0x4DF5A623)
-                            : AppTheme.success.withOpacity(0.3))),
+                            : AppTheme.success.withValues(alpha: 0.3))),
                 child: Row(
                   children: [
                     Container(
@@ -4199,7 +4718,7 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
                           color: (_selectedEquipmentId.isEmpty
                                   ? AppTheme.accent
                                   : AppTheme.success)
-                              .withOpacity(0.12),
+                              .withValues(alpha: 0.12),
                           borderRadius: BorderRadius.circular(12)),
                       child: Icon(
                           _selectedEquipmentId.isEmpty
@@ -4615,7 +5134,7 @@ class LabPoliciesScreen extends StatelessWidget {
             child: ListView.separated(
               padding: const EdgeInsets.all(16),
               itemCount: policies.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 12),
+              separatorBuilder: (_, _) => const SizedBox(height: 12),
               itemBuilder: (_, i) {
                 final pol = policies[i];
                 final color = Color(pol['color'] as int);
@@ -4642,7 +5161,7 @@ class LabPoliciesScreen extends StatelessWidget {
                         Container(
                           width: 36, height: 36,
                           decoration: BoxDecoration(
-                              color: color.withOpacity(0.10),
+                              color: color.withValues(alpha: 0.10),
                               borderRadius: BorderRadius.circular(10)),
                           child: Center(
                               child: Text(pol['icon'] as String,
@@ -4760,6 +5279,82 @@ class _QRScanScreenState extends State<QRScanScreen> {
     }
   }
 
+  Future<void> _processReturn(
+      String equipId, String equipName, String condition) async {
+    Navigator.pop(context); // close the return sheet
+    final res = await ApiService.returnEquipmentByQr(equipId, condition);
+    if (!mounted) return;
+    if (res['success'] != true) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(res['message'] ?? 'Failed to process return.'),
+        backgroundColor: AppTheme.danger,
+        behavior: SnackBarBehavior.floating,
+      ));
+      setState(() => _scanning = true);
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(condition == 'Damaged'
+          ? '"$equipName" returned and marked Under Repair.'
+          : '"$equipName" marked as returned.'),
+      backgroundColor:
+          condition == 'Damaged' ? AppTheme.warning : AppTheme.success,
+      behavior: SnackBarBehavior.floating,
+    ));
+    if (condition == 'Damaged') {
+      await _offerDamageFollowUp(res, equipId, equipName);
+    }
+    if (mounted) setState(() => _scanning = true);
+  }
+
+  Future<void> _offerDamageFollowUp(
+      Map<String, dynamic> res, String equipId, String equipName) async {
+    final borrower  = '${res['borrower_name'] ?? 'the student'}';
+    final studentId = '${res['student_id'] ?? ''}';
+    final apply = await showDialog<bool>(
+      context: context,
+      builder: (dCtx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        icon: const Icon(Icons.gpp_maybe_outlined, color: AppTheme.danger, size: 44),
+        title: const Text('Log Damage & Hold?'),
+        content: Text(
+            'Record a damage report for "$equipName" and place a borrowing hold '
+            'on $borrower until it is settled?',
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 13)),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(dCtx, false),
+              child: const Text('Skip', style: TextStyle(color: AppTheme.textMid))),
+          ElevatedButton(
+              onPressed: () => Navigator.pop(dCtx, true),
+              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+              child: const Text('Log & Hold')),
+        ],
+      ),
+    );
+    if (apply != true) return;
+    await ApiService.submitDamageReport({
+      'equipment_id':   equipId,
+      'equipment_name': equipName,
+      'student_id':     studentId,
+      'borrower_name':  res['borrower_name'] ?? '',
+      'student_number': res['student_number'] ?? '',
+      'description':    'Reported damaged on return (staff QR return).',
+      'reported_by':    'staff',
+    });
+    if (studentId.isNotEmpty) {
+      await ApiService.setStudentHold(studentId, true,
+          reason: 'Damaged equipment "$equipName" pending settlement.');
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      content: Text('Damage report logged and hold placed.'),
+      backgroundColor: AppTheme.danger,
+      behavior: SnackBarBehavior.floating,
+    ));
+  }
+
   void _showReturnSheet(Map<String, dynamic> equipment) {
     final status      = equipment['status'] ?? 'Unknown';
     final isBorrowed  = status == 'Borrowed';
@@ -4787,7 +5382,7 @@ class _QRScanScreenState extends State<QRScanScreen> {
           Container(
             width: 60, height: 60,
             decoration: BoxDecoration(
-                color: (isBorrowed ? AppTheme.warning : AppTheme.success).withOpacity(0.12),
+                color: (isBorrowed ? AppTheme.warning : AppTheme.success).withValues(alpha: 0.12),
                 borderRadius: BorderRadius.circular(16)),
             child: Icon(Icons.science_outlined,
                 color: isBorrowed ? AppTheme.warning : AppTheme.success, size: 30),
@@ -4817,37 +5412,32 @@ class _QRScanScreenState extends State<QRScanScreen> {
 
           // Action
           if (isBorrowed) ...[
-            const Text('Confirm that the student has returned this equipment.',
+            const Text(
+                'Confirm the student has returned this equipment, then record its condition.',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 13, color: AppTheme.textMid)),
             const SizedBox(height: 16),
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
-                onPressed: () async {
-                  Navigator.pop(context); // close sheet
-                  try {
-                    await ApiService.returnEquipment(equipId, 'Good');
-                    if (!mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                      content: Text('✅ "$equipName" marked as returned!'),
-                      backgroundColor: AppTheme.success,
-                      behavior: SnackBarBehavior.floating,
-                    ));
-                    setState(() => _scanning = true);
-                  } catch (_) {
-                    if (!mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                      content: Text('Failed to update. Check connection.'),
-                      backgroundColor: AppTheme.danger,
-                      behavior: SnackBarBehavior.floating,
-                    ));
-                  }
-                },
-                icon: const Icon(Icons.assignment_return_rounded),
-                label: const Text('Confirm Return'),
+                onPressed: () => _processReturn(equipId, equipName, 'Good'),
+                icon: const Icon(Icons.check_circle_outline_rounded),
+                label: const Text('Return — Good Condition'),
                 style: ElevatedButton.styleFrom(
-                    backgroundColor: AppTheme.primary,
+                    backgroundColor: AppTheme.success,
+                    padding: const EdgeInsets.symmetric(vertical: 14)),
+              ),
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () => _processReturn(equipId, equipName, 'Damaged'),
+                icon: const Icon(Icons.report_problem_outlined),
+                label: const Text('Return — Report Damage'),
+                style: OutlinedButton.styleFrom(
+                    foregroundColor: AppTheme.warning,
+                    side: const BorderSide(color: AppTheme.warning),
                     padding: const EdgeInsets.symmetric(vertical: 14)),
               ),
             ),
@@ -5143,12 +5733,11 @@ class _LiveBorrowList extends StatelessWidget {
       child: ListView.separated(
         padding: const EdgeInsets.all(16),
         itemCount: items.length,
-        separatorBuilder: (_, __) => const SizedBox(height: 10),
+        separatorBuilder: (_, _) => const SizedBox(height: 10),
         itemBuilder: (_, i) {
           final e = items[i];
           final status = e['status'] ?? 'Pending';
           final dueDate = e['due_date'] ?? '';
-          final txId = '${e['transaction_id']}';
           return Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16)),
@@ -5179,42 +5768,27 @@ class _LiveBorrowList extends StatelessWidget {
                   const SizedBox(height: 12),
                   const Divider(color: AppTheme.divider, height: 1),
                   const SizedBox(height: 10),
-                  Row(children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: () => Navigator.push(context,
-                            MaterialPageRoute(builder: (_) => const DamageReportScreen())),
-                        icon: const Icon(Icons.report_problem_outlined, size: 16),
-                        label: const Text('Report'),
-                        style: OutlinedButton.styleFrom(
-                            foregroundColor: AppTheme.warning,
-                            side: const BorderSide(color: AppTheme.warning)),
-                      ),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: () => Navigator.push(context,
+                          MaterialPageRoute(builder: (_) => const DamageReportScreen())),
+                      icon: const Icon(Icons.report_problem_outlined, size: 16),
+                      label: const Text('Report Damage'),
+                      style: OutlinedButton.styleFrom(
+                          foregroundColor: AppTheme.warning,
+                          side: const BorderSide(color: AppTheme.warning)),
                     ),
-                    const SizedBox(width: 10),
+                  ),
+                  const SizedBox(height: 8),
+                  const Row(children: [
+                    Icon(Icons.qr_code_2_rounded, size: 13, color: AppTheme.textLight),
+                    SizedBox(width: 6),
                     Expanded(
-                      child: ElevatedButton.icon(
-                        onPressed: () async {
-                          final confirm = await showDialog<bool>(context: context,
-                            builder: (_) => AlertDialog(
-                              title: const Text('Return Equipment'),
-                              content: const Text('Confirm return of this equipment?'),
-                              actions: [
-                                TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-                                ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('Return')),
-                              ],
-                            ));
-                          if (confirm == true) {
-                            try {
-                              await ApiService.returnEquipment(txId, 'Good');
-                              onRefresh();
-                            } catch (_) {}
-                          }
-                        },
-                        icon: const Icon(Icons.check_circle_outline_rounded, size: 16),
-                        label: const Text('Return'),
-                      ),
-                    ),
+                        child: Text(
+                      'Returns are processed by lab staff scanning the QR code on the item.',
+                      style: TextStyle(fontSize: 11, color: AppTheme.textLight),
+                    )),
                   ]),
                 ],
               ],
@@ -5517,7 +6091,7 @@ class _DamageReportScreenState extends State<DamageReportScreen> {
                       margin: const EdgeInsets.only(right: 8),
                       padding: const EdgeInsets.symmetric(vertical: 14),
                       decoration: BoxDecoration(
-                        color: selected ? c.withOpacity(0.12) : Colors.white,
+                        color: selected ? c.withValues(alpha: 0.12) : Colors.white,
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(
                             color: selected ? c : AppTheme.divider,
@@ -6146,7 +6720,7 @@ class _NotificationsSettingsScreenState extends State<NotificationsSettingsScree
             style: const TextStyle(fontSize: 12, color: AppTheme.textMid)),
         value: value,
         onChanged: onChanged,
-        activeColor: activeColor ?? AppTheme.primary,
+        activeThumbColor: activeColor ?? AppTheme.primary,
       ),
     );
   }
@@ -6312,7 +6886,7 @@ class _HelpFaqScreenState extends State<HelpFaqScreen> {
             child: ListView.separated(
               padding: const EdgeInsets.all(16),
               itemCount: _faqs.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 8),
+              separatorBuilder: (_, _) => const SizedBox(height: 8),
               itemBuilder: (_, i) {
                 final isOpen = _expanded == i;
                 return GestureDetector(
@@ -6707,6 +7281,7 @@ class _AdminHomeState extends State<_AdminHome> {
     try {
       final equipment = await ApiService.getEquipment();
       final requests  = await ApiService.getRequests();
+      final damage    = await ApiService.openDamageReportCount();
       final now = DateTime.now();
       setState(() {
         _stats = {
@@ -6719,7 +7294,7 @@ class _AdminHomeState extends State<_AdminHome> {
           }).length,
           'total_equipment':     equipment.length,
           'available_equipment': equipment.where((e) => e['status'] == 'Available').length,
-          'damage_reports':      0,
+          'damage_reports':      damage,
         };
         _pending  = requests.where((e) => e['status'] == 'Pending').toList();
         _approved = requests.where((e) => e['status'] == 'Approved').toList();
@@ -6846,8 +7421,11 @@ class _AdminHomeState extends State<_AdminHome> {
                                   decoration: BoxDecoration(
                                       color: const Color(0x33F5A623),
                                       borderRadius: BorderRadius.circular(8)),
-                                  child: const Text('ADMIN',
-                                      style: TextStyle(
+                                  child: Text(
+                                      Session.isViewer
+                                          ? 'VIEW ONLY'
+                                          : Session.staffRole.toUpperCase(),
+                                      style: const TextStyle(
                                           color: AppTheme.accent,
                                           fontSize: 11,
                                           fontWeight: FontWeight.bold,
@@ -6894,7 +7472,31 @@ class _AdminHomeState extends State<_AdminHome> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-
+                      if (!Session.canManage)
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(12),
+                          margin: const EdgeInsets.only(bottom: 16),
+                          decoration: BoxDecoration(
+                            color: const Color(0x141B3A8C),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: const Color(0x331B3A8C)),
+                          ),
+                          child: const Row(children: [
+                            Icon(Icons.visibility_outlined,
+                                color: AppTheme.primary, size: 18),
+                            SizedBox(width: 10),
+                            Expanded(
+                                child: Text(
+                              'View-only access. You can review all records but '
+                              'cannot approve, edit, or process transactions.',
+                              style: TextStyle(
+                                  fontSize: 12,
+                                  color: AppTheme.textDark,
+                                  height: 1.4),
+                            )),
+                          ]),
+                        ),
 
                       // ── Live Stats ──
                       IntrinsicHeight(
@@ -6930,20 +7532,49 @@ class _AdminHomeState extends State<_AdminHome> {
                       ),
                       const SizedBox(height: 24),
 
-                      // ── Scan QR for Return ──
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton.icon(
-                          onPressed: () => Navigator.push(context,
-                              MaterialPageRoute(builder: (_) => const QRScanScreen())),
-                          icon: const Icon(Icons.qr_code_scanner_rounded),
-                          label: const Text('Scan QR to Process Return'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: AppTheme.primary,
-                            padding: const EdgeInsets.symmetric(vertical: 14),
+                      // ── Scan QR for Return (manage rights only) ──
+                      if (Session.canManage) ...[
+                        SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton.icon(
+                            onPressed: () => Navigator.push(context,
+                                MaterialPageRoute(builder: (_) => const QRScanScreen())),
+                            icon: const Icon(Icons.qr_code_scanner_rounded),
+                            label: const Text('Scan QR to Process Return'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppTheme.primary,
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                            ),
                           ),
                         ),
-                      ),
+                        const SizedBox(height: 12),
+                      ],
+                      // ── Damage reports + penalties quick access (all staff) ──
+                      Row(children: [
+                        Expanded(child: OutlinedButton.icon(
+                          onPressed: () => Navigator.push(context,
+                              MaterialPageRoute(builder: (_) => const AdminDamageReportsScreen())),
+                          icon: const Icon(Icons.report_problem_outlined, size: 18),
+                          label: Text('Damage (${_stats['damage_reports'] ?? 0})'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: AppTheme.warning,
+                            side: const BorderSide(color: AppTheme.warning),
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                          ),
+                        )),
+                        const SizedBox(width: 12),
+                        Expanded(child: OutlinedButton.icon(
+                          onPressed: () => Navigator.push(context,
+                              MaterialPageRoute(builder: (_) => const AdminPenaltiesScreen())),
+                          icon: const Icon(Icons.gpp_maybe_outlined, size: 18),
+                          label: const Text('Penalties'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: AppTheme.danger,
+                            side: const BorderSide(color: AppTheme.danger),
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                          ),
+                        )),
+                      ]),
                       const SizedBox(height: 24),
 
                       // ── Pending Approvals ──
@@ -7000,27 +7631,29 @@ class _AdminHomeState extends State<_AdminHome> {
                                   ])),
                                   StatusBadge(label: 'Pending', color: AppTheme.accent),
                                 ]),
-                                const SizedBox(height: 12),
-                                const Divider(color: AppTheme.divider, height: 1),
-                                const SizedBox(height: 10),
-                                Row(children: [
-                                  Expanded(child: OutlinedButton.icon(
-                                    onPressed: () => _reject(txId),
-                                    icon: const Icon(Icons.close_rounded, size: 16),
-                                    label: const Text('Deny'),
-                                    style: OutlinedButton.styleFrom(
-                                        foregroundColor: AppTheme.danger,
-                                        side: const BorderSide(color: AppTheme.danger)),
-                                  )),
-                                  const SizedBox(width: 10),
-                                  Expanded(child: ElevatedButton.icon(
-                                    onPressed: () => _approve(txId),
-                                    icon: const Icon(Icons.check_rounded, size: 16),
-                                    label: const Text('Approve'),
-                                    style: ElevatedButton.styleFrom(
-                                        backgroundColor: AppTheme.success),
-                                  )),
-                                ]),
+                                if (Session.canManage) ...[
+                                  const SizedBox(height: 12),
+                                  const Divider(color: AppTheme.divider, height: 1),
+                                  const SizedBox(height: 10),
+                                  Row(children: [
+                                    Expanded(child: OutlinedButton.icon(
+                                      onPressed: () => _reject(txId),
+                                      icon: const Icon(Icons.close_rounded, size: 16),
+                                      label: const Text('Deny'),
+                                      style: OutlinedButton.styleFrom(
+                                          foregroundColor: AppTheme.danger,
+                                          side: const BorderSide(color: AppTheme.danger)),
+                                    )),
+                                    const SizedBox(width: 10),
+                                    Expanded(child: ElevatedButton.icon(
+                                      onPressed: () => _approve(txId),
+                                      icon: const Icon(Icons.check_rounded, size: 16),
+                                      label: const Text('Approve'),
+                                      style: ElevatedButton.styleFrom(
+                                          backgroundColor: AppTheme.success),
+                                    )),
+                                  ]),
+                                ],
                               ]),
                             ),
                           );
@@ -7079,19 +7712,21 @@ class _AdminHomeState extends State<_AdminHome> {
                                   ])),
                                   StatusBadge(label: 'Active', color: AppTheme.success),
                                 ]),
-                                const SizedBox(height: 12),
-                                const Divider(color: AppTheme.divider, height: 1),
-                                const SizedBox(height: 10),
-                                SizedBox(
-                                  width: double.infinity,
-                                  child: ElevatedButton.icon(
-                                    onPressed: () => _return(txId, equipName),
-                                    icon: const Icon(Icons.assignment_return_rounded, size: 16),
-                                    label: const Text('Mark as Returned'),
-                                    style: ElevatedButton.styleFrom(
-                                        backgroundColor: AppTheme.primary),
+                                if (Session.canManage) ...[
+                                  const SizedBox(height: 12),
+                                  const Divider(color: AppTheme.divider, height: 1),
+                                  const SizedBox(height: 10),
+                                  SizedBox(
+                                    width: double.infinity,
+                                    child: ElevatedButton.icon(
+                                      onPressed: () => _return(txId, equipName),
+                                      icon: const Icon(Icons.assignment_return_rounded, size: 16),
+                                      label: const Text('Mark as Returned'),
+                                      style: ElevatedButton.styleFrom(
+                                          backgroundColor: AppTheme.primary),
+                                    ),
                                   ),
-                                ),
+                                ],
                               ]),
                             ),
                           );
@@ -7195,11 +7830,50 @@ class _AdminRequestsScreenState extends State<AdminRequestsScreen> {
     }
   }
 
-  Future<void> _action(String txId, String action) async {
+  Future<void> _action(String txId, String action, {String reason = ''}) async {
     try {
-      await ApiService.updateRequestStatus(txId, action);
+      final res = await ApiService.updateRequestStatus(txId, action, reason: reason);
+      if (mounted && res['success'] != true) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(res['message'] ?? 'Action failed.'),
+          backgroundColor: AppTheme.danger,
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
       _load();
     } catch (_) {}
+  }
+
+  Future<void> _confirmReject(String txId) async {
+    final reasonCtrl = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dCtx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Reject Request'),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Text('Optionally add a reason the student will see.',
+              style: TextStyle(fontSize: 13, color: AppTheme.textMid)),
+          const SizedBox(height: 12),
+          TextField(
+            controller: reasonCtrl,
+            maxLines: 2,
+            decoration: const InputDecoration(
+                hintText: 'e.g. Equipment reserved for a class'),
+          ),
+        ]),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(dCtx, false),
+              child: const Text('Cancel', style: TextStyle(color: AppTheme.textMid))),
+          ElevatedButton(
+              onPressed: () => Navigator.pop(dCtx, true),
+              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+              child: const Text('Reject')),
+        ],
+      ),
+    );
+    if (ok == true) _action(txId, 'reject', reason: reasonCtrl.text.trim());
   }
 
   Widget _buildCard(dynamic e, {bool showActions = false}) {
@@ -7212,12 +7886,12 @@ class _AdminRequestsScreenState extends State<AdminRequestsScreen> {
       decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: sc.withOpacity(0.25))),
+          border: Border.all(color: sc.withValues(alpha: 0.25))),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
-            CircleAvatar(radius: 20, backgroundColor: sc.withOpacity(0.12),
+            CircleAvatar(radius: 20, backgroundColor: sc.withValues(alpha: 0.12),
                 child: Text(studentName.isNotEmpty ? studentName[0].toUpperCase() : '?',
                     style: TextStyle(color: sc, fontWeight: FontWeight.bold, fontSize: 15))),
             const SizedBox(width: 12),
@@ -7241,11 +7915,19 @@ class _AdminRequestsScreenState extends State<AdminRequestsScreen> {
                   style: const TextStyle(fontSize: 11, color: AppTheme.textMid)),
             ]),
           ),
-          if (showActions && status == 'Pending') ...[
+          if (status == 'Rejected' && '${e['reject_reason'] ?? ''}'.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text('Reason: ${e['reject_reason']}',
+                style: const TextStyle(
+                    fontSize: 11,
+                    color: AppTheme.danger,
+                    fontStyle: FontStyle.italic)),
+          ],
+          if (showActions && status == 'Pending' && Session.canManage) ...[
             const SizedBox(height: 10),
             Row(children: [
               Expanded(child: OutlinedButton.icon(
-                onPressed: () => _action(txId, 'reject'),
+                onPressed: () => _confirmReject(txId),
                 icon: const Icon(Icons.close_rounded, size: 16),
                 label: const Text('Deny'),
                 style: OutlinedButton.styleFrom(foregroundColor: AppTheme.danger, side: const BorderSide(color: AppTheme.danger)),
@@ -7316,7 +7998,7 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
   bool _hasError = false;
   String _search = '';
   String _filter = 'All';
-  final _categories = ['All', 'Electronics', 'Optics', 'Measurement', 'Tools', 'Microcontroller'];
+  final _categories = ['All', ..._kCategories];
 
   @override
   void initState() { super.initState(); WidgetsBinding.instance.addPostFrameCallback((_) => _load()); }
@@ -7348,6 +8030,27 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
     }
   }
 
+  // Equipment thumbnail — shows the uploaded photo, falling back to a
+  // category icon when there is none / it fails to load.
+  Widget _thumb(Map<String, dynamic> e, Color condColor) {
+    final url = e['image_url'] as String? ?? '';
+    final fallback = Container(
+      width: 48, height: 48,
+      decoration: BoxDecoration(
+          color: condColor.withValues(alpha: 0.10),
+          borderRadius: BorderRadius.circular(12)),
+      child: Icon(_equipmentIcon(e['category'] as String? ?? ''),
+          color: condColor, size: 24),
+    );
+    if (url.isEmpty) return fallback;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(12),
+      child: Image.network(url,
+          width: 48, height: 48, fit: BoxFit.cover,
+          errorBuilder: (c, err, s) => fallback),
+    );
+  }
+
   void _openEdit(Map<String, dynamic> equipment) {
     showModalBottomSheet(
       context: context,
@@ -7358,6 +8061,43 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
         onSaved: _load,
       ),
     );
+  }
+
+  Future<void> _confirmDelete(Map<String, dynamic> equipment) async {
+    final id = '${equipment['equipment_id'] ?? ''}';
+    final name = equipment['equipment_name'] ?? 'this equipment';
+    if (id.isEmpty) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dCtx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        icon: const Icon(Icons.delete_forever_rounded, color: AppTheme.danger, size: 44),
+        title: const Text('Delete Equipment'),
+        content: Text(
+            'Permanently remove "$name" from the inventory? This cannot be undone.',
+            textAlign: TextAlign.center),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(dCtx, false),
+              child: const Text('Cancel', style: TextStyle(color: AppTheme.textMid))),
+          ElevatedButton(
+              onPressed: () => Navigator.pop(dCtx, true),
+              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+              child: const Text('Delete')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    final res = await ApiService.deleteEquipment(id);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(res['success'] == true
+          ? '"$name" deleted.'
+          : (res['message'] ?? 'Delete failed.')),
+      backgroundColor: res['success'] == true ? AppTheme.success : AppTheme.danger,
+      behavior: SnackBarBehavior.floating,
+    ));
+    if (res['success'] == true) _load();
   }
 
   @override
@@ -7374,7 +8114,7 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
             const Text('Failed to load inventory',
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppTheme.textDark)),
             const SizedBox(height: 8),
-            const Text('Check your connection and make sure Laragon is running.',
+            const Text('Check your internet connection and try again.',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 13, color: AppTheme.textMid)),
             const SizedBox(height: 20),
@@ -7441,7 +8181,7 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
                   child: ListView.separated(
                     scrollDirection: Axis.horizontal,
                     itemCount: _categories.length,
-                    separatorBuilder: (_, __) => const SizedBox(width: 8),
+                    separatorBuilder: (_, _) => const SizedBox(width: 8),
                     itemBuilder: (_, i) {
                       final c = _categories[i];
                       final sel = _filter == c;
@@ -7484,7 +8224,7 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
                 : ListView.separated(
                     padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
                     itemCount: filtered.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 10),
+                    separatorBuilder: (_, _) => const SizedBox(height: 10),
                     itemBuilder: (_, i) {
                       final e = filtered[i];
                       final status = e['status'] ?? 'Available';
@@ -7503,15 +8243,7 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
                           ),
                           child: Row(
                             children: [
-                              Container(
-                                width: 48,
-                                height: 48,
-                                decoration: BoxDecoration(
-                                    color: condColor.withValues(alpha: 0.10),
-                                    borderRadius: BorderRadius.circular(12)),
-                                child: Icon(_equipmentIcon(e['category'] as String? ?? ''),
-                                    color: condColor, size: 24),
-                              ),
+                              _thumb(e, condColor),
                               const SizedBox(width: 14),
                               Expanded(
                                 child: Column(
@@ -7532,22 +8264,32 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
                                 ),
                               ),
                               const SizedBox(width: 4),
-                              PopupMenuButton<String>(
-                                onSelected: (v) {
-                                  if (v == 'edit') _openEdit(e);
-                                },
-                                itemBuilder: (_) => const [
-                                  PopupMenuItem(
-                                    value: 'edit',
-                                    child: Row(children: [
-                                      Icon(Icons.edit_outlined, size: 18, color: AppTheme.textMid),
-                                      SizedBox(width: 8),
-                                      Text('Edit Details'),
-                                    ]),
-                                  ),
-                                ],
-                                child: const Icon(Icons.more_vert_rounded, color: AppTheme.textLight),
-                              ),
+                              if (Session.canManage)
+                                PopupMenuButton<String>(
+                                  onSelected: (v) {
+                                    if (v == 'edit') _openEdit(e);
+                                    if (v == 'delete') _confirmDelete(e);
+                                  },
+                                  itemBuilder: (_) => const [
+                                    PopupMenuItem(
+                                      value: 'edit',
+                                      child: Row(children: [
+                                        Icon(Icons.edit_outlined, size: 18, color: AppTheme.textMid),
+                                        SizedBox(width: 8),
+                                        Text('Edit Details'),
+                                      ]),
+                                    ),
+                                    PopupMenuItem(
+                                      value: 'delete',
+                                      child: Row(children: [
+                                        Icon(Icons.delete_outline_rounded, size: 18, color: AppTheme.danger),
+                                        SizedBox(width: 8),
+                                        Text('Delete', style: TextStyle(color: AppTheme.danger)),
+                                      ]),
+                                    ),
+                                  ],
+                                  child: const Icon(Icons.more_vert_rounded, color: AppTheme.textLight),
+                                ),
                             ],
                           ),
                         ),
@@ -7557,15 +8299,16 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
+      floatingActionButton: !Session.canManage ? null : FloatingActionButton.extended(
         onPressed: () async {
+          final messenger = ScaffoldMessenger.of(context);
           final result = await Navigator.push<Map<String, dynamic>>(
               context,
               MaterialPageRoute(builder: (_) => const EquipmentRegistrationScreen()));
           if (result != null) {
-            _load(); // reload from API
+            _load();
             if (!mounted) return;
-            ScaffoldMessenger.of(context).showSnackBar(
+            messenger.showSnackBar(
               SnackBar(
                 content: Text('${result['name']} registered successfully!'),
                 backgroundColor: AppTheme.success,
@@ -7610,8 +8353,8 @@ class _EditEquipmentSheetState extends State<_EditEquipmentSheet> {
   bool _saving = false;
 
   final _imagePicker = ImagePicker();
-  final _statuses    = ['Available', 'Borrowed', 'Under Repair', 'For Disposal'];
-  final _categories  = ['Electronics', 'Optics', 'Measurement', 'Tools', 'Safety', 'Other'];
+  final _statuses    = _kStatuses;
+  final _categories  = _kCategories;
 
   @override
   void initState() {
@@ -8021,42 +8764,6 @@ class _DetailRow extends StatelessWidget {
   }
 }
 
-// Simple QR placeholder painter — looks like a real QR at a glance
-class _QrPlaceholderPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final dark = Paint()..color = const Color(0xFF1A2340);
-    final s = size.width / 10;
-
-    // Corner squares
-    void corner(double x, double y) {
-      canvas.drawRect(Rect.fromLTWH(x, y, s * 3, s * 3), dark);
-      canvas.drawRect(Rect.fromLTWH(x + s * 0.5, y + s * 0.5, s * 2, s * 2),
-          Paint()..color = Colors.white);
-      canvas.drawRect(Rect.fromLTWH(x + s, y + s, s, s), dark);
-    }
-    corner(0, 0);
-    corner(size.width - s * 3, 0);
-    corner(0, size.height - s * 3);
-
-    // Random data dots
-    final positions = [
-      [4,0],[5,0],[6,0],[4,1],[6,1],[4,2],[5,2],
-      [0,4],[1,4],[0,5],[2,5],[0,6],[1,6],[2,6],
-      [4,4],[6,4],[5,5],[4,6],[6,6],
-      [7,3],[8,4],[9,4],[7,5],[9,5],[8,6],[7,7],[9,7],
-      [3,7],[4,8],[6,8],[3,9],[5,9],
-    ];
-    for (final p in positions) {
-      canvas.drawRect(
-          Rect.fromLTWH(p[0] * s, p[1] * s, s * 0.85, s * 0.85), dark);
-    }
-  }
-
-  @override
-  bool shouldRepaint(_QrPlaceholderPainter _) => false;
-}
-
 // ─── Equipment Registration Screen ────────────────────────────────────────────
 
 class EquipmentRegistrationScreen extends StatefulWidget {
@@ -8086,8 +8793,9 @@ class _EquipmentRegistrationScreenState
   final List<String> _selectedCourses = [];
   bool _qrGenerated = false;
   String _generatedId = '';
+  String _generatedQr = '';
 
-  final _categories = ['Electronics', 'Optics', 'Measurement', 'Tools', 'Safety', 'Other'];
+  final _categories = _kCategories;
   final _conditions = ['Good', 'Fair', 'Under Repair', 'For Disposal'];
 
   String? _validateRequired(String? v) =>
@@ -8115,11 +8823,14 @@ class _EquipmentRegistrationScreenState
       return;
     }
 
-    // Generate a mock equipment ID
-    final now = DateTime.now();
-    final id = 'EQ-${now.millisecondsSinceEpoch % 9000 + 1000}';
+    // Build the real QR code now (same scheme the backend uses) so the preview
+    // matches the code that will be stored and printed.
+    final cat = _selectedCategory ?? 'EQ';
+    final prefix = cat.length >= 3 ? cat.substring(0, 3).toUpperCase() : cat.toUpperCase();
+    final suffix = DateTime.now().millisecondsSinceEpoch.toString().substring(7);
     setState(() {
-      _generatedId = id;
+      _generatedQr = '$prefix-$suffix';
+      _generatedId = _generatedQr;
       _qrGenerated = true;
     });
   }
@@ -8143,6 +8854,7 @@ class _EquipmentRegistrationScreenState
         'brand':          _brandCtrl.text.trim(),
         'model':          _modelCtrl.text.trim(),
         'serial_number':  _serialCtrl.text.trim(),
+        'qr_code':        _generatedQr,
         'image_url':      '',
       });
       if (!mounted) return;
@@ -8588,7 +9300,18 @@ class _EquipmentRegistrationScreenState
                           border: Border.all(color: AppTheme.divider, width: 2),
                           borderRadius: BorderRadius.circular(16),
                         ),
-                        child: CustomPaint(painter: _QrPlaceholderPainter()),
+                        child: _generatedQr.isEmpty
+                            ? const SizedBox.shrink()
+                            : QrImageView(
+                                data: _generatedQr,
+                                version: QrVersions.auto,
+                                eyeStyle: const QrEyeStyle(
+                                    eyeShape: QrEyeShape.square,
+                                    color: AppTheme.primary),
+                                dataModuleStyle: const QrDataModuleStyle(
+                                    dataModuleShape: QrDataModuleShape.square,
+                                    color: AppTheme.primary),
+                              ),
                       ),
                       const SizedBox(height: 14),
                       Text(_generatedId,
@@ -8596,32 +9319,24 @@ class _EquipmentRegistrationScreenState
                       const SizedBox(height: 4),
                       Text(_nameCtrl.text,
                           style: const TextStyle(fontSize: 12, color: AppTheme.textMid)),
-                      const SizedBox(height: 20),
-                      // Action buttons
-                      Row(
-                        children: [
-                          Expanded(
-                            child: OutlinedButton.icon(
-                              onPressed: () {},
-                              icon: const Icon(Icons.share_outlined, size: 16),
-                              label: const Text('Share'),
-                              style: OutlinedButton.styleFrom(
-                                  foregroundColor: AppTheme.primary,
-                                  side: const BorderSide(color: AppTheme.primary),
-                                  padding: const EdgeInsets.symmetric(vertical: 12)),
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: ElevatedButton.icon(
-                              onPressed: () {},
-                              icon: const Icon(Icons.print_rounded, size: 16),
-                              label: const Text('Print QR'),
-                              style: ElevatedButton.styleFrom(
-                                  padding: const EdgeInsets.symmetric(vertical: 12)),
-                            ),
-                          ),
-                        ],
+                      const SizedBox(height: 16),
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: const Color(0x0F1B3A8C),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Row(children: [
+                          Icon(Icons.info_outline_rounded,
+                              color: AppTheme.primary, size: 16),
+                          SizedBox(width: 8),
+                          Expanded(child: Text(
+                            'This QR is saved with the equipment. You can reopen '
+                            'it any time from the equipment detail page to display '
+                            'or screenshot for printing.',
+                            style: TextStyle(fontSize: 11, color: AppTheme.textMid, height: 1.4),
+                          )),
+                        ]),
                       ),
                     ],
                   ),
@@ -8757,6 +9472,7 @@ class _AdminReportsScreenState extends State<AdminReportsScreen> {
     try {
       final txSnap = await ApiService.getRequests();
       final eqList = await ApiService.getEquipment();
+      final damageReports = await ApiService.getDamageReports();
 
       // Count borrowing stats
       final now = DateTime.now();
@@ -8790,7 +9506,7 @@ class _AdminReportsScreenState extends State<AdminReportsScreen> {
         _totalBorrowings  = total;
         _totalReturned    = returned;
         _totalOverdue     = overdue;
-        _totalDamage      = 0;
+        _totalDamage      = damageReports.length;
         _totalEquipment   = eqList.length;
         _onTimeRate       = onTime;
         _mostBorrowed     = top4;
@@ -8833,8 +9549,8 @@ class _AdminReportsScreenState extends State<AdminReportsScreen> {
       buf.writeln('MOST BORROWED EQUIPMENT');
       buf.writeln('----------------------------------------------');
       int rank = 1;
-      _mostBorrowed.forEach((name, count) {
-        buf.writeln('$rank. $name — ${count}x borrowed');
+      _mostBorrowed.forEach((name, cnt) {
+        buf.writeln('$rank. $name — ${cnt}x borrowed');
         rank++;
       });
 
@@ -9221,6 +9937,324 @@ class _ReportCard extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+// ─── Admin Damage Reports Screen (staff review) ───────────────────────────────
+// Lets laboratory staff review damage reports filed by students (and logged on
+// QR returns), mark them resolved, and place a hold on the borrower.
+class AdminDamageReportsScreen extends StatefulWidget {
+  const AdminDamageReportsScreen({super.key});
+  @override
+  State<AdminDamageReportsScreen> createState() =>
+      _AdminDamageReportsScreenState();
+}
+
+class _AdminDamageReportsScreenState extends State<AdminDamageReportsScreen> {
+  bool _loading = true;
+  List<dynamic> _reports = [];
+
+  @override
+  void initState() { super.initState(); _load(); }
+
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    try {
+      final data = await ApiService.getDamageReports();
+      if (!mounted) return;
+      setState(() { _reports = data; _loading = false; });
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Color _statusColor(String s) {
+    switch (s) {
+      case 'Resolved': return AppTheme.success;
+      case 'Reviewed': return AppTheme.primary;
+      default:         return AppTheme.warning; // Open
+    }
+  }
+
+  Future<void> _resolve(Map<String, dynamic> r) async {
+    final res = await ApiService.updateDamageReport('${r['report_id']}', 'Resolved');
+    if (!mounted) return;
+    if (res['success'] == true) _load();
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(res['success'] == true
+          ? 'Report marked resolved.'
+          : (res['message'] ?? 'Failed.')),
+      backgroundColor: res['success'] == true ? AppTheme.success : AppTheme.danger,
+      behavior: SnackBarBehavior.floating,
+    ));
+  }
+
+  Future<void> _holdBorrower(Map<String, dynamic> r) async {
+    final sid = '${r['student_id'] ?? ''}';
+    if (sid.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('No linked student account for this report.'),
+        backgroundColor: AppTheme.danger, behavior: SnackBarBehavior.floating));
+      return;
+    }
+    final res = await ApiService.setStudentHold(sid, true,
+        reason: 'Damaged equipment "${r['equipment_name'] ?? ''}" pending settlement.');
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(res['success'] == true
+          ? 'Hold placed on borrower.'
+          : (res['message'] ?? 'Failed.')),
+      backgroundColor: AppTheme.danger, behavior: SnackBarBehavior.floating));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Damage Reports')),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : _reports.isEmpty
+              ? const Center(
+                  child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                    Icon(Icons.verified_outlined, size: 52, color: AppTheme.textLight),
+                    SizedBox(height: 12),
+                    Text('No damage reports', style: TextStyle(color: AppTheme.textMid)),
+                  ]),
+                )
+              : RefreshIndicator(
+                  onRefresh: _load,
+                  child: ListView.separated(
+                    padding: const EdgeInsets.all(16),
+                    itemCount: _reports.length,
+                    separatorBuilder: (_, _) => const SizedBox(height: 10),
+                    itemBuilder: (_, i) {
+                      final r = _reports[i];
+                      final status = '${r['status'] ?? 'Open'}';
+                      final sc = _statusColor(status);
+                      final date = '${r['reported_at'] ?? ''}'.split('T').first;
+                      return Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border(left: BorderSide(color: sc, width: 4)),
+                        ),
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Row(children: [
+                            const Icon(Icons.report_problem_outlined,
+                                color: AppTheme.warning, size: 20),
+                            const SizedBox(width: 8),
+                            Expanded(child: Text('${r['equipment_name'] ?? 'Equipment'}',
+                                style: const TextStyle(fontWeight: FontWeight.bold,
+                                    fontSize: 14, color: AppTheme.textDark))),
+                            StatusBadge(label: status, color: sc),
+                          ]),
+                          const SizedBox(height: 8),
+                          Text('${r['description'] ?? ''}',
+                              style: const TextStyle(fontSize: 13,
+                                  color: AppTheme.textMid, height: 1.5)),
+                          const SizedBox(height: 8),
+                          Row(children: [
+                            const Icon(Icons.person_outline_rounded, size: 13, color: AppTheme.textLight),
+                            const SizedBox(width: 4),
+                            Expanded(child: Text(
+                                '${r['borrower_name'] ?? r['student_number'] ?? '—'}',
+                                style: const TextStyle(fontSize: 12, color: AppTheme.textMid))),
+                            const Icon(Icons.calendar_today_rounded, size: 12, color: AppTheme.textLight),
+                            const SizedBox(width: 4),
+                            Text(date, style: const TextStyle(fontSize: 11, color: AppTheme.textMid)),
+                          ]),
+                          if (Session.canManage && status != 'Resolved') ...[
+                            const SizedBox(height: 12),
+                            const Divider(height: 1, color: AppTheme.divider),
+                            const SizedBox(height: 10),
+                            Row(children: [
+                              Expanded(child: OutlinedButton.icon(
+                                onPressed: () => _holdBorrower(r),
+                                icon: const Icon(Icons.gpp_maybe_outlined, size: 16),
+                                label: const Text('Hold'),
+                                style: OutlinedButton.styleFrom(
+                                    foregroundColor: AppTheme.danger,
+                                    side: const BorderSide(color: AppTheme.danger)),
+                              )),
+                              const SizedBox(width: 10),
+                              Expanded(child: ElevatedButton.icon(
+                                onPressed: () => _resolve(r),
+                                icon: const Icon(Icons.check_rounded, size: 16),
+                                label: const Text('Resolve'),
+                                style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success),
+                              )),
+                            ]),
+                          ],
+                        ]),
+                      );
+                    },
+                  ),
+                ),
+    );
+  }
+}
+
+// ─── Admin Penalties / Holds Screen (Prof recommendation #3) ──────────────────
+// Surfaces students on a borrowing hold and students with overdue loans, and
+// lets staff place or lift holds.
+class AdminPenaltiesScreen extends StatefulWidget {
+  const AdminPenaltiesScreen({super.key});
+  @override
+  State<AdminPenaltiesScreen> createState() => _AdminPenaltiesScreenState();
+}
+
+class _AdminPenaltiesScreenState extends State<AdminPenaltiesScreen> {
+  bool _loading = true;
+  List<dynamic> _held = [];
+  List<dynamic> _overdue = [];
+
+  @override
+  void initState() { super.initState(); _load(); }
+
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    try {
+      final held = await ApiService.getHeldStudents();
+      final reqs = await ApiService.getRequests();
+      final now = DateTime.now();
+      final overdue = reqs.where((e) {
+        if (e['status'] != 'Approved') return false;
+        final due = DateTime.tryParse('${e['due_date']}'.replaceAll(' ', 'T'));
+        return due != null && due.isBefore(now);
+      }).toList();
+      if (!mounted) return;
+      setState(() { _held = held; _overdue = overdue; _loading = false; });
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _setHold(String sid, bool hold, {String reason = ''}) async {
+    if (sid.isEmpty) return;
+    final res = await ApiService.setStudentHold(sid, hold, reason: reason);
+    if (!mounted) return;
+    if (res['success'] == true) _load();
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(res['success'] == true
+          ? (hold ? 'Hold placed.' : 'Hold lifted.')
+          : (res['message'] ?? 'Failed.')),
+      backgroundColor: res['success'] == true ? AppTheme.success : AppTheme.danger,
+      behavior: SnackBarBehavior.floating,
+    ));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Penalties & Holds')),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : RefreshIndicator(
+              onRefresh: _load,
+              child: ListView(padding: const EdgeInsets.all(16), children: [
+                const SectionHeader(title: 'Students on Hold'),
+                const SizedBox(height: 10),
+                if (_held.isEmpty)
+                  _penaltyEmpty('No students are currently on hold.')
+                else
+                  ..._held.map(_holdCard),
+                const SizedBox(height: 24),
+                const SectionHeader(title: 'Overdue Loans'),
+                const SizedBox(height: 10),
+                if (_overdue.isEmpty)
+                  _penaltyEmpty('No overdue loans.')
+                else
+                  ..._overdue.map(_overdueCard),
+                const SizedBox(height: 20),
+              ]),
+            ),
+    );
+  }
+
+  Widget _penaltyEmpty(String msg) => Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+            color: Colors.white, borderRadius: BorderRadius.circular(16)),
+        child: Center(
+            child: Text(msg,
+                style: const TextStyle(color: AppTheme.textMid, fontSize: 13))),
+      );
+
+  Widget _holdCard(dynamic s) {
+    final sid = '${s['student_id'] ?? ''}';
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border(left: BorderSide(color: AppTheme.danger, width: 4)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Icon(Icons.gpp_bad_outlined, color: AppTheme.danger, size: 20),
+          const SizedBox(width: 8),
+          Expanded(child: Text('${s['name'] ?? s['student_number'] ?? 'Student'}',
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14,
+                  color: AppTheme.textDark))),
+          StatusBadge(label: 'On Hold', color: AppTheme.danger),
+        ]),
+        const SizedBox(height: 6),
+        Text('${s['hold_reason'] ?? ''}',
+            style: const TextStyle(fontSize: 12, color: AppTheme.textMid)),
+        if (Session.canManage) ...[
+          const SizedBox(height: 10),
+          SizedBox(width: double.infinity, child: ElevatedButton.icon(
+            onPressed: () => _setHold(sid, false),
+            icon: const Icon(Icons.lock_open_rounded, size: 16),
+            label: const Text('Lift Hold'),
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success),
+          )),
+        ],
+      ]),
+    );
+  }
+
+  Widget _overdueCard(dynamic e) {
+    final sid = '${e['student_id'] ?? ''}';
+    final due = '${e['due_date'] ?? ''}'.split('T').first;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border(left: BorderSide(color: AppTheme.warning, width: 4)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Icon(Icons.schedule_rounded, color: AppTheme.warning, size: 20),
+          const SizedBox(width: 8),
+          Expanded(child: Text('${e['borrower_name'] ?? e['student_number'] ?? 'Student'}',
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14,
+                  color: AppTheme.textDark))),
+          StatusBadge(label: 'Overdue', color: AppTheme.warning),
+        ]),
+        const SizedBox(height: 6),
+        Text('${e['equipment_name'] ?? ''}  •  Due: $due',
+            style: const TextStyle(fontSize: 12, color: AppTheme.textMid)),
+        if (Session.canManage) ...[
+          const SizedBox(height: 10),
+          SizedBox(width: double.infinity, child: OutlinedButton.icon(
+            onPressed: sid.isEmpty
+                ? null
+                : () => _setHold(sid, true,
+                    reason: 'Overdue: "${e['equipment_name'] ?? 'equipment'}" not returned by $due.'),
+            icon: const Icon(Icons.gpp_maybe_outlined, size: 16),
+            label: const Text('Place Hold'),
+            style: OutlinedButton.styleFrom(
+                foregroundColor: AppTheme.danger,
+                side: const BorderSide(color: AppTheme.danger)),
+          )),
+        ],
+      ]),
     );
   }
 }
