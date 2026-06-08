@@ -377,20 +377,25 @@ class ApiService {
       final equipId = data['equipment_id'].toString();
       final sid     = data['student_id'].toString();
 
-      // ── Penalty / hold gate (Prof recommendation #3) ──
-      // A student on hold (overdue or staff-imposed penalty) cannot borrow.
+      // Read the student profile once — used for both the hold gate and the
+      // program/course restriction below.
+      Map<String, dynamic>? stuData;
       if (sid.isNotEmpty) {
         final stuDoc = await _db.collection('students').doc(sid).get();
-        if (stuDoc.exists && stuDoc.data()?['hold'] == true) {
-          return {
-            'success': false,
-            'on_hold': true,
-            'message': (stuDoc.data()?['hold_reason'] ?? '').toString().isNotEmpty
-                ? stuDoc.data()!['hold_reason']
-                : 'Your borrowing privileges are on hold. Please settle the '
-                    'penalty with the laboratory staff before borrowing again.',
-          };
-        }
+        if (stuDoc.exists) stuData = stuDoc.data();
+      }
+
+      // ── Penalty / hold gate (Prof recommendation #3) ──
+      // A student on hold (overdue or staff-imposed penalty) cannot borrow.
+      if (stuData?['hold'] == true) {
+        return {
+          'success': false,
+          'on_hold': true,
+          'message': (stuData?['hold_reason'] ?? '').toString().isNotEmpty
+              ? stuData!['hold_reason']
+              : 'Your borrowing privileges are on hold. Please settle the '
+                  'penalty with the laboratory staff before borrowing again.',
+        };
       }
 
       // Check equipment is Available
@@ -404,6 +409,29 @@ class ApiService {
           'success': false,
           'message': 'Equipment is currently ${eqData['status']}.'
         };
+      }
+
+      // ── Program / course restriction (Prof recommendation #1) ──
+      // Equipment can be tagged with the programs allowed to borrow it. An empty
+      // or absent list means the item is open to every program. Otherwise, a
+      // student may only borrow it if their program is in the allowed list. This
+      // is the authoritative gate — the catalog also hides restricted items, but
+      // this stops a borrow even if the item is reached some other way.
+      final allowedCourses =
+          (eqData['courses'] as List?)?.map((c) => '$c').toList() ?? [];
+      if (allowedCourses.isNotEmpty) {
+        final studentCourse =
+            '${stuData?['course'] ?? data['course'] ?? ''}';
+        if (!allowedCourses.contains(studentCourse)) {
+          return {
+            'success': false,
+            'course_restricted': true,
+            'message': 'This equipment is reserved for '
+                '${allowedCourses.map((c) => courseLabel(c)).join(', ')} '
+                'students and is not available to your program'
+                '${studentCourse.isNotEmpty ? ' (${courseLabel(studentCourse)})' : ''}.',
+          };
+        }
       }
 
       // Honour the student's requested return time, enforcing the same-day
@@ -765,7 +793,23 @@ class ApiService {
 // ─── Shared constants ─────────────────────────────────────────────────────────
 // Engineering programs/courses offered by CEA. Equipment can be tagged with the
 // programs allowed to borrow it (Prof recommendation #1 — categorize by program).
-const _kCourses = ['CE', 'ME', 'ECE', 'EE', 'Arch', 'EnSci', 'IE', 'Astronomy'];
+// The short code is what gets stored on the student/equipment records; the full
+// program name (see _kCourseNames) is what we show in the UI.
+const _kCourses = ['CE', 'ME', 'ECE', 'EE', 'IE', 'Arch'];
+
+// Human-readable program names, keyed by the stored course code.
+const _kCourseNames = {
+  'CE':   'Civil Engineering',
+  'ME':   'Mechanical Engineering',
+  'ECE':  'Electronics Engineering',
+  'EE':   'Electrical Engineering',
+  'IE':   'Industrial Engineering',
+  'Arch': 'Architecture',
+};
+
+// Friendly label for a course code, e.g. 'CE' → 'Civil Engineering'.
+// Falls back to the raw code for any legacy/unknown value.
+String courseLabel(String code) => _kCourseNames[code] ?? code;
 
 // Equipment categories — single source of truth shared by the catalog, inventory
 // filter, registration and edit screens so the lists never drift apart.
@@ -2484,7 +2528,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
                                         contentPadding: EdgeInsets.symmetric(horizontal: 14, vertical: 14)),
                                     hint: const Text('Select course'),
                                     isExpanded: true,
-                                    items: _kCourses.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
+                                    items: _kCourses.map((c) => DropdownMenuItem(value: c, child: Text(courseLabel(c)))).toList(),
                                     onChanged: (v) => setState(() => _selectedCourse = v),
                                   ),
                                 ],
@@ -3973,7 +4017,7 @@ class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
                   Text(
                     _showAllCourses
                         ? 'Showing all programs'
-                        : 'Showing equipment for ${Session.course}',
+                        : 'Showing equipment for ${courseLabel(Session.course)}',
                     style: const TextStyle(fontSize: 12, color: AppTheme.primary, fontWeight: FontWeight.w600),
                   ),
                   const Spacer(),
@@ -4068,7 +4112,7 @@ class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
                                   const SizedBox(width: 4),
                                   Expanded(
                                     child: Text(
-                                      'For: ${(e['courses'] as List).join(', ')}',
+                                      'For: ${(e['courses'] as List).map((c) => courseLabel('$c')).join(', ')}',
                                       style: const TextStyle(
                                           fontSize: 11,
                                           color: AppTheme.primary,
@@ -4257,7 +4301,7 @@ class EquipmentDetailScreen extends StatelessWidget {
                       if (location.isNotEmpty) _specRow('Storage Location', location),
                       _specRow('Status', status, isLast: courses.isEmpty),
                       if (courses.isNotEmpty)
-                        _specRow('Available to', courses.join(', '), isLast: true),
+                        _specRow('Available to', courses.map((c) => courseLabel(c)).join(', '), isLast: true),
                     ]),
                   ),
                   // ── QR Code card ──
@@ -4664,12 +4708,17 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
               child: const Text('Done'))],
           ));
       } else {
-        // Show full error in dialog so it can be read completely
+        // A program/course restriction gets its own clearer presentation; other
+        // failures fall back to the generic error dialog. Either way the full
+        // message is shown so it can be read completely.
+        final restricted = res['course_restricted'] == true;
         showDialog(context: context,
           builder: (_) => AlertDialog(
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-            icon: const Icon(Icons.error_outline_rounded, color: AppTheme.danger, size: 48),
-            title: const Text('Submission Failed'),
+            icon: Icon(
+                restricted ? Icons.school_outlined : Icons.error_outline_rounded,
+                color: AppTheme.danger, size: 48),
+            title: Text(restricted ? 'Not Available to Your Program' : 'Submission Failed'),
             content: Text(res['message'] ?? 'Unknown error.',
                 textAlign: TextAlign.center,
                 style: const TextStyle(fontSize: 13)),
@@ -6222,7 +6271,7 @@ class ProfileScreen extends StatelessWidget {
                             fontWeight: FontWeight.bold)),
                     const SizedBox(height: 4),
                     Text(
-                      '${Session.studentNumber}  •  ${Session.currentUser?['course'] ?? 'CEA'}',
+                      '${Session.studentNumber}  •  ${courseLabel(Session.currentUser?['course'] ?? 'CEA')}',
                       style: const TextStyle(color: AppTheme.textLight, fontSize: 13),
                     ),
                     const SizedBox(height: 12),
@@ -6484,7 +6533,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                   prefixIcon: Icon(Icons.school_outlined, color: AppTheme.textMid)),
               hint: const Text('Select course'),
               isExpanded: true,
-              items: _kCourses.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
+              items: _kCourses.map((c) => DropdownMenuItem(value: c, child: Text(courseLabel(c)))).toList(),
               onChanged: (v) => setState(() => _selectedCourse = v),
             ),
             const SizedBox(height: 16),
@@ -8662,7 +8711,7 @@ class _EditEquipmentSheetState extends State<_EditEquipmentSheet> {
                   children: _kCourses.map((c) {
                     final sel = _selectedCourses.contains(c);
                     return FilterChip(
-                      label: Text(c, style: TextStyle(
+                      label: Text(courseLabel(c), style: TextStyle(
                           fontSize: 12, color: sel ? Colors.white : AppTheme.textDark)),
                       selected: sel,
                       selectedColor: AppTheme.primary,
@@ -9083,7 +9132,7 @@ class _EquipmentRegistrationScreenState
                   children: _kCourses.map((c) {
                     final selected = _selectedCourses.contains(c);
                     return FilterChip(
-                      label: Text(c, style: TextStyle(fontSize: 12, color: selected ? Colors.white : AppTheme.textDark)),
+                      label: Text(courseLabel(c), style: TextStyle(fontSize: 12, color: selected ? Colors.white : AppTheme.textDark)),
                       selected: selected,
                       selectedColor: AppTheme.primary,
                       backgroundColor: AppTheme.surface,
