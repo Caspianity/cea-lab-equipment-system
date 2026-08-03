@@ -5,12 +5,12 @@
 // -----------------------------------------------------------------------------
 
 import 'package:flutter/material.dart';
+import '../staff/admin_dashboard_screen.dart';
 import '../student/home_screen.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../../firstFile.dart';
 import '../../services/session.dart';
 import '../../theme.dart';
 import 'login_screen.dart';

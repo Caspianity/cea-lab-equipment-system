@@ -293,3 +293,31 @@ Widget specRow(String label, String value,
   );
 }
 
+
+// Label/value row used by the staff student-detail and equipment-registration
+// screens. Promoted here when the staff cluster was split, since three screens
+// in two different libraries use it.
+class DetailRow extends StatelessWidget {
+  final String label, value;
+  const DetailRow({super.key, required this.label, required this.value});
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12)),
+      child: Row(
+        children: [
+          Text(label, style: const TextStyle(fontSize: 13, color: AppTheme.textMid)),
+          const Spacer(),
+          Text(value,
+              style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: AppTheme.textDark)),
+        ],
+      ),
+    );
+  }
+}
+
