@@ -7,6 +7,7 @@
 
 import 'package:flutter/material.dart';
 
+import '../../constants.dart';
 import '../../theme.dart';
 import '../../widgets/common.dart';
 
@@ -37,7 +38,7 @@ class AboutScreen extends StatelessWidget {
                 Text('CEA Laboratory · New Era University',
                     style: TextStyle(color: AppTheme.textLight, fontSize: 13)),
                 SizedBox(height: 12),
-                StatusBadge(label: 'Version 1.0.0', color: AppTheme.accent),
+                StatusBadge(label: kAppVersionLabel, color: AppTheme.accent),
               ]),
             ),
 

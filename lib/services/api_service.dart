@@ -837,11 +837,7 @@ class ApiService {
     final equipF    = getEquipmentCounts();
     final pendingF  = getRequests(status: 'Pending');
     final approvedF = getRequests(status: 'Approved');
-    final damageF   = _db
-        .collection('damage_reports')
-        .where('status', isEqualTo: 'Open')
-        .count()
-        .get();
+    final damageF   = openDamageReportCount();
     final studentsF = _db.collection('students').count().get();
     final heldF     = _db
         .collection('students')
@@ -869,7 +865,7 @@ class ApiService {
         'overdue_loans':       overdue,
         'total_equipment':     equip.total,
         'available_equipment': equip.available,
-        'damage_reports':      damage.count ?? 0,
+        'damage_reports':      damage,
         'total_students':      students.count ?? 0,
         'held_students':       held.count ?? 0,
       },
@@ -1013,15 +1009,31 @@ class ApiService {
     return results;
   }
 
-  // Number of damage reports still needing attention (status == Open).
-  // Counted server-side rather than by reading every damage report.
+  // Number of damage reports still needing attention.
+  //
+  // Counted as everything minus the two triaged states, NOT as
+  // `where('status', isEqualTo: 'Open')`. A Firestore equality filter cannot
+  // match a document that has no `status` field at all, and reports created
+  // before triage started stamping `status: 'Open'` have none — so the old
+  // query returned 0 while the Damage Reports screen listed those same reports
+  // as "Open" (it defaults a missing status to Open, as does the filter in
+  // getDamageReports). The dashboard and the list disagreed on live data.
+  //
+  // Subtracting is what matches the UI: `whereNotIn` would not work either,
+  // because a missing field never satisfies an inequality. The triage
+  // vocabulary is closed — Open / Reviewed / Resolved — so this is exact.
+  // Still counted server-side; three aggregations are billed per ~1000
+  // documents scanned, not per document read.
   static Future<int> openDamageReportCount() async {
-    final snap = await _db
-        .collection('damage_reports')
-        .where('status', isEqualTo: 'Open')
-        .count()
-        .get();
-    return snap.count ?? 0;
+    final col = _db.collection('damage_reports');
+    final totalF    = col.count().get();
+    final resolvedF = col.where('status', isEqualTo: 'Resolved').count().get();
+    final reviewedF = col.where('status', isEqualTo: 'Reviewed').count().get();
+    final total    = (await totalF).count ?? 0;
+    final resolved = (await resolvedF).count ?? 0;
+    final reviewed = (await reviewedF).count ?? 0;
+    final open = total - resolved - reviewed;
+    return open < 0 ? 0 : open;
   }
 
   // Update a damage report's triage status (Open → Reviewed / Resolved) and
