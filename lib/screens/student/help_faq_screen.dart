@@ -27,19 +27,19 @@ class _HelpFaqScreenState extends State<HelpFaqScreen> {
     },
     {
       'q': 'How long can I borrow equipment?',
-      'a': 'The borrowing period is set when you submit your request by choosing a return date. Maximum borrowing period is 30 days.',
+      'a': 'Borrowing is same-day only. Equipment must be returned by 5:00 PM on the day it is borrowed, and the return time is fixed when you submit your request.',
     },
     {
       'q': 'What happens if I return equipment late?',
       'a': 'Late returns are recorded in your profile. Repeated late returns may affect your borrowing privileges. Always return equipment on or before the due date.',
     },
     {
-      'q': 'How do I scan a QR code to borrow?',
-      'a': 'Tap "Scan QR" on the home screen, point your camera at the equipment\'s QR code, and the system will automatically identify the equipment for your borrow request.',
+      'q': 'Where do I find the equipment QR code?',
+      'a': 'Open the item from the Equipment Catalog — its QR code is shown on the Equipment Detail screen. You do not scan anything yourself to borrow: lab staff scan the code on the item when they process your return.',
     },
     {
       'q': 'What do I do if equipment is damaged?',
-      'a': 'Report it immediately using the Damage Report feature. Go to My Borrowings, find the item, and tap "Report". Describe the damage and submit — lab staff will be notified.',
+      'a': 'Report it immediately using the Damage Report feature. Go to My Borrowings, find the item, and tap "Report Damage". Describe the damage and submit — lab staff will be notified.',
     },
     {
       'q': 'Can I cancel a borrow request?',
