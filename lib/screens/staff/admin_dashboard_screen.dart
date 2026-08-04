@@ -65,9 +65,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 style: TextStyle(color: AppTheme.textMid)),
           ),
           ElevatedButton.icon(
-            onPressed: () {
-              Navigator.pop(context);
-              Navigator.pushReplacement(context,
+            onPressed: () async {
+              // Capture the navigator before the await so the BuildContext is
+              // not used across an async gap.
+              final navigator = Navigator.of(context);
+              navigator.pop();
+              await ApiService.signOut();
+              navigator.pushReplacement(
                   MaterialPageRoute(builder: (_) => const LoginScreen()));
             },
             icon: const Icon(Icons.logout_rounded, size: 16),

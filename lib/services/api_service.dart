@@ -322,6 +322,24 @@ class ApiService {
     }
   }
 
+  // End the session properly.
+  //
+  // `Session.clear()` on its own only drops the in-memory user — it leaves
+  // `FirebaseAuth.instance.currentUser` set, and the splash screen restores
+  // that on the next launch whenever "Remember me" is on (which is the
+  // default). Signing out and relaunching would therefore drop straight back
+  // into the account that just signed out — including a staff ADMIN account on
+  // a shared lab phone. Always go through here.
+  static Future<void> signOut() async {
+    try {
+      await _auth.signOut();
+    } catch (_) {
+      // Even if the network call fails, drop the local session so the UI
+      // cannot keep acting as the signed-in user.
+    }
+    Session.clear();
+  }
+
   // ── Equipment ─────────────────────────────────────────────────────────────
   static Future<List<dynamic>> getEquipment(
       {String search = '', String category = ''}) async {
