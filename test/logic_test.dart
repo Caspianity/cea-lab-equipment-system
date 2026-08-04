@@ -80,6 +80,18 @@ void main() {
       expect(r['rating'], 'Good');
     });
 
+    test('counts only still-approved loans as active', () {
+      final r = ApiService.studentReliability([
+        {'status': 'Approved', 'due_date': '2999-01-01T17:00:00'},
+        {'status': 'Approved', 'due_date': '2999-01-02T17:00:00'},
+        {'status': 'Returned', 'due_date': '2026-07-20T17:00:00', 'return_date': '2026-07-20T16:00:00'},
+        {'status': 'Pending'},
+        {'status': 'Rejected'},
+      ], now: now);
+      expect(r['active'], 2);
+      expect(r['loans'], 3);
+    });
+
     test('a return after the due date counts as late', () {
       final r = ApiService.studentReliability([
         {'status': 'Returned', 'due_date': '2026-07-20T17:00:00', 'return_date': '2026-07-21T09:00:00'},

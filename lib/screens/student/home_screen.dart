@@ -6,14 +6,17 @@
 
 import 'package:flutter/material.dart';
 
-import '../../firstFile.dart';
 import '../../services/api_service.dart';
+import '../../services/notif_prefs.dart';
 import '../../services/session.dart';
 import '../../theme.dart';
 import '../../widgets/common.dart';
 import 'equipment_catalog_screen.dart';
 import 'borrow_request_screen.dart';
+import 'damage_report_screen.dart';
 import 'lab_policies_screen.dart';
+import 'my_borrowings_screen.dart';
+import 'profile_screen.dart';
 
 // ─── Student Home Screen ──────────────────────────────────────────────────────
 
@@ -429,18 +432,28 @@ class _StudentDashboardState extends State<_StudentDashboard> {
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    const Text('Borrowing on Hold',
-                                        style: TextStyle(
+                                    Text(
+                                        Session.isOnHold
+                                            ? 'Borrowing on Hold'
+                                            : 'Overdue Equipment',
+                                        style: const TextStyle(
                                             fontWeight: FontWeight.bold,
                                             fontSize: 14,
                                             color: AppTheme.danger)),
                                     const SizedBox(height: 4),
                                     Text(
+                                      // A hold and an overdue item are separate
+                                      // triggers, so never claim the student has
+                                      // overdue equipment when they simply have a
+                                      // hold recorded with no reason.
                                       Session.isOnHold && Session.holdReason.isNotEmpty
                                           ? Session.holdReason
-                                          : 'You have overdue equipment. Please return it and '
-                                              'settle any penalty with the laboratory staff '
-                                              'before borrowing again.',
+                                          : _overdue > 0
+                                              ? 'You have overdue equipment. Please return it and '
+                                                  'settle any penalty with the laboratory staff '
+                                                  'before borrowing again.'
+                                              : 'Your borrowing privileges are on hold. Please see '
+                                                  'the laboratory staff to settle the penalty.',
                                       style: const TextStyle(
                                           fontSize: 12,
                                           color: AppTheme.textDark,

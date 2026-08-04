@@ -436,7 +436,8 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
             if (!mounted) return;
             messenger.showSnackBar(
               SnackBar(
-                content: Text('${result['name']} registered successfully!'),
+                content: Text(
+                    '${result['equipment_name'] ?? 'Equipment'} registered successfully!'),
                 backgroundColor: AppTheme.success,
                 behavior: SnackBarBehavior.floating,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),

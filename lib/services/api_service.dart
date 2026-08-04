@@ -1110,11 +1110,12 @@ class ApiService {
   static Map<String, dynamic> studentReliability(List<dynamic> txns,
       {DateTime? now}) {
     final ref = now ?? DateTime.now();
-    var loans = 0, late = 0, overdue = 0, damages = 0;
+    var loans = 0, late = 0, overdue = 0, damages = 0, active = 0;
     for (final t in txns) {
       final status = '${t['status'] ?? ''}';
       final due = _asDate(t['due_date']);
       if (status == 'Approved' || status == 'Returned') loans++;
+      if (status == 'Approved') active++;
       if (status == 'Returned') {
         final ret = _asDate(t['return_date']);
         if (due != null && ret != null && ret.isAfter(due)) late++;
@@ -1132,6 +1133,7 @@ class ApiService {
     final rating = flags == 0 ? 'Good' : (flags <= 2 ? 'Fair' : 'Watch');
     return {
       'loans': loans,
+      'active': active,
       'late': late,
       'overdue': overdue,
       'damages': damages,
