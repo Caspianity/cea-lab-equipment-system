@@ -159,7 +159,19 @@ class _StudentDashboardState extends State<_StudentDashboard> {
       // Each card type honours the corresponding toggle in
       // Profile → Notifications (NotifPrefs).
       if (status == 'Approved' && due != null) {
-        if (NotifPrefs.dueSoon &&
+        // Check overdue FIRST. The due date is 5:00 PM the same day, so an
+        // item borrowed today and not returned by 5 is both "due today" and
+        // overdue — and the due-today branch used to win, leaving the card
+        // reading "due back today before 5:00 PM" at 10 PM while the Active
+        // Loans list right below it badged the very same item "Overdue".
+        if (NotifPrefs.overdue && due.isBefore(now)) {
+          notes.add({
+            'icon':  Icons.warning_amber_rounded,
+            'color': AppTheme.danger,
+            'title': 'Overdue!',
+            'body':  '$equipName was due on ${due.month}/${due.day}. Please return it immediately.',
+          });
+        } else if (NotifPrefs.dueSoon &&
             due.year == now.year && due.month == now.month && due.day == now.day) {
           notes.add({
             'icon':  Icons.access_alarm_rounded,
@@ -167,17 +179,14 @@ class _StudentDashboardState extends State<_StudentDashboard> {
             'title': 'Due Today',
             'body':  '$equipName is due back today before 5:00 PM.',
           });
-        } else if (NotifPrefs.overdue && due.isBefore(now)) {
-          notes.add({
-            'icon':  Icons.warning_amber_rounded,
-            'color': AppTheme.danger,
-            'title': 'Overdue!',
-            'body':  '$equipName was due on ${due.month}/${due.day}. Please return it immediately.',
-          });
         }
       }
-      if (NotifPrefs.approved &&
-          status == 'Approved' && due != null && !due.isBefore(now)) {
+      // Acknowledge the approval regardless of the due date. This used to
+      // require `!due.isBefore(now)`, which silently suppressed the card for
+      // anything approved after 5:00 PM — and since the due date IS 5:00 PM
+      // the same day, every evening approval landed already past due. The
+      // student got no confirmation at all that staff had approved them.
+      if (NotifPrefs.approved && status == 'Approved' && due != null) {
         notes.add({
           'icon':  Icons.check_circle_rounded,
           'color': AppTheme.success,
