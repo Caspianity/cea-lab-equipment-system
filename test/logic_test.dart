@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 // business logic no longer pulls in the UI module at all.
 import 'package:cea_lab_app/constants.dart';
 import 'package:cea_lab_app/services/api_service.dart';
+import 'package:cea_lab_app/services/session.dart';
 
 void main() {
   group('Due-date policy (same-day 5:00 PM cap)', () {
@@ -132,6 +133,21 @@ void main() {
     });
     test('falls back to the raw code for unknown values', () {
       expect(courseLabel('BSIT'), 'BSIT');
+    });
+  });
+
+  // Regression: studentId used to int.parse the Firebase UID, which is always
+  // alphanumeric, so it was always 0 and Edit Profile wrote to students/0.
+  group('Session.studentId', () {
+    tearDown(Session.clear);
+
+    test('is the Firebase UID exactly as stored', () {
+      Session.set({'student_id': 'aB3xY9kLmN0pQrStUvWx12345678'}, 'student');
+      expect(Session.studentId, 'aB3xY9kLmN0pQrStUvWx12345678');
+    });
+    test('is empty (not 0) when nobody is signed in', () {
+      Session.clear();
+      expect(Session.studentId, '');
     });
   });
 }

@@ -11,6 +11,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../services/api_service.dart';
 import '../../services/session.dart';
 import '../../theme.dart';
 import 'login_screen.dart';
@@ -70,6 +71,15 @@ class _SplashScreenState extends State<SplashScreen>
           await db.collection('students').doc(uid).get().timeout(limit);
       if (!mounted) return;
       if (studentDoc.exists) {
+        // Same e-mail verification gate as login(). A restored session must
+        // never be the weaker door: an unverified account used to get in by
+        // leaving a session behind from a failed Lab Staff sign-in and then
+        // relaunching (QA 2026-09-19, H3).
+        if (!ApiService.passesVerificationGate(studentDoc.data())) {
+          await ApiService.signOut();
+          _goLogin();
+          return;
+        }
         Session.set({...studentDoc.data()!, 'student_id': uid}, 'student');
         Navigator.pushReplacement(context,
             MaterialPageRoute(builder: (_) => const StudentHomeScreen()));
@@ -81,6 +91,11 @@ class _SplashScreenState extends State<SplashScreen>
           await db.collection('staff').doc(uid).get().timeout(limit);
       if (!mounted) return;
       if (staffDoc.exists) {
+        if (!ApiService.passesVerificationGate(staffDoc.data(), isStaff: true)) {
+          await ApiService.signOut();
+          _goLogin();
+          return;
+        }
         Session.set({...staffDoc.data()!, 'staff_id': uid}, 'staff');
         Navigator.pushReplacement(context,
             MaterialPageRoute(builder: (_) => const AdminDashboardScreen()));

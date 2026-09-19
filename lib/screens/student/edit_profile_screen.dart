@@ -57,7 +57,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     setState(() => _saving = true);
     try {
       final res = await ApiService.updateProfile(
-        studentId: Session.studentId,
+        studentId: Session.studentId, // the UID — see Session.studentId
         name:      name,
         course:    course,
         yearLevel: yearLevel,

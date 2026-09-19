@@ -50,35 +50,8 @@ class _AdminRequestsScreenState extends State<AdminRequestsScreen> {
   }
 
   Future<void> _confirmReject(String txId) async {
-    final reasonCtrl = TextEditingController();
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (dCtx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Text('Reject Request'),
-        content: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Text('Optionally add a reason the student will see.',
-              style: TextStyle(fontSize: 13, color: AppTheme.textMid)),
-          const SizedBox(height: 12),
-          TextField(
-            controller: reasonCtrl,
-            maxLines: 2,
-            decoration: const InputDecoration(
-                hintText: 'e.g. Equipment reserved for a class'),
-          ),
-        ]),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(dCtx, false),
-              child: const Text('Cancel', style: TextStyle(color: AppTheme.textMid))),
-          ElevatedButton(
-              onPressed: () => Navigator.pop(dCtx, true),
-              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
-              child: const Text('Reject')),
-        ],
-      ),
-    );
-    if (ok == true) _action(txId, 'reject', reason: reasonCtrl.text.trim());
+    final reason = await showRejectRequestDialog(context);
+    if (reason != null) _action(txId, 'reject', reason: reason);
   }
 
   // One-line "who processed this" note built from the audit fields stamped on

@@ -173,6 +173,43 @@ Widget FieldLabel(String label) => Text(label,
         fontWeight: FontWeight.w600,
         color: AppTheme.textDark));
 
+// Confirm a request rejection and collect an optional reason for the student.
+// Returns the (trimmed, possibly empty) reason, or null if cancelled. Shared by
+// the Requests screen and the Dashboard so both Deny paths ask first.
+Future<String?> showRejectRequestDialog(BuildContext context) async {
+  final reasonCtrl = TextEditingController();
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (dCtx) => AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      title: const Text('Reject Request'),
+      content: Column(mainAxisSize: MainAxisSize.min, children: [
+        const Text('Optionally add a reason the student will see.',
+            style: TextStyle(fontSize: 13, color: AppTheme.textMid)),
+        const SizedBox(height: 12),
+        TextField(
+          controller: reasonCtrl,
+          maxLines: 2,
+          decoration: const InputDecoration(
+              hintText: 'e.g. Equipment reserved for a class'),
+        ),
+      ]),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.pop(dCtx, false),
+            child: const Text('Cancel', style: TextStyle(color: AppTheme.textMid))),
+        ElevatedButton(
+            onPressed: () => Navigator.pop(dCtx, true),
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+            child: const Text('Reject')),
+      ],
+    ),
+  );
+  // Not disposed here: the dialog's TextField is still mounted during its exit
+  // animation, after this future has already completed.
+  return ok == true ? reasonCtrl.text.trim() : null;
+}
+
 class SectionTitle extends StatelessWidget {
   final String title;
   final IconData icon;

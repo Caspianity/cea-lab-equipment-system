@@ -94,6 +94,34 @@ class ApiService {
   }
 
   // ── Auth ──────────────────────────────────────────────────────────────────
+
+  // The e-mail verification gate, shared by login() and the splash screen's
+  // session restore so the two can never disagree. True when the signed-in
+  // user may proceed: demo mode, an admin/viewer staff account (provisioned by
+  // an administrator), an account predating kLegacyAccountCutoff, or a
+  // verified e-mail address.
+  static bool passesVerificationGate(Map<String, dynamic>? profile,
+      {bool isStaff = false}) {
+    if (kDemoMode) return true;
+    if (isStaff) {
+      final sRole = (profile?['role'] ?? 'staff').toString();
+      if (sRole == 'admin' || sRole == 'viewer') return true;
+    }
+    if (_isLegacyAccount(profile)) return true;
+    return _auth.currentUser?.emailVerified == true;
+  }
+
+  // A failed login must never leave anyone signed in. Sign-in can succeed
+  // before a later step fails — e.g. a student account used on the Lab Staff
+  // tab — and the splash screen restores whatever session is left behind on
+  // the next launch, which used to skip the verification gate entirely
+  // (QA 2026-09-19, H3).
+  static Future<void> _signOutQuietly() async {
+    try {
+      if (_auth.currentUser != null) await _auth.signOut();
+    } catch (_) {}
+  }
+
   static Future<Map<String, dynamic>> login(
       String identifier, String password, String role) async {
     try {
@@ -116,9 +144,7 @@ class ApiService {
           await _auth.signOut();
           return {'success': false, 'message': 'Student profile not found.'};
         }
-        if (!kDemoMode &&
-            !_isLegacyAccount(doc.data()) &&
-            _auth.currentUser?.emailVerified != true) {
+        if (!passesVerificationGate(doc.data())) {
           await _auth.signOut();
           return {'success': false, 'message': 'email_not_verified', 'email': email};
         }
@@ -135,11 +161,21 @@ class ApiService {
         Map<String, dynamic> staffData;
         String staffDocId;
         if (!snap.exists) {
-          final q = await _db
-              .collection('staff')
-              .where('email', isEqualTo: identifier)
-              .limit(1)
-              .get();
+          final QuerySnapshot<Map<String, dynamic>> q;
+          try {
+            q = await _db
+                .collection('staff')
+                .where('email', isEqualTo: identifier)
+                .limit(1)
+                .get();
+          } on FirebaseException catch (e) {
+            // Only staff may query this collection, so a non-staff account
+            // (e.g. a student on the Lab Staff tab) is refused here rather
+            // than finding no match. Say so plainly instead of "permission".
+            if (e.code != 'permission-denied') rethrow;
+            await _auth.signOut();
+            return {'success': false, 'message': 'Staff account not found.'};
+          }
           if (q.docs.isEmpty) {
             await _auth.signOut();
             return {'success': false, 'message': 'Staff account not found.'};
@@ -154,10 +190,7 @@ class ApiService {
         // Admin / viewer accounts are provisioned by an administrator and skip
         // the email-verification gate; regular staff must still verify, unless
         // the account predates the closing of demo mode (see kLegacyAccountCutoff).
-        final sRole = (staffData['role'] ?? 'staff').toString();
-        if (!kDemoMode && sRole != 'admin' && sRole != 'viewer' &&
-            !_isLegacyAccount(staffData) &&
-            _auth.currentUser?.emailVerified != true) {
+        if (!passesVerificationGate(staffData, isStaff: true)) {
           await _auth.signOut();
           return {'success': false, 'message': 'email_not_verified', 'email': identifier};
         }
@@ -165,6 +198,7 @@ class ApiService {
         return {'success': true, 'role': 'staff', 'user': {...staffData, 'staff_id': staffDocId}};
       }
     } on FirebaseAuthException catch (e) {
+      await _signOutQuietly();
       String msg = 'Login failed.';
       if (e.code == 'wrong-password' || e.code == 'invalid-credential')
         msg = 'Incorrect password.';
@@ -172,6 +206,43 @@ class ApiService {
       else if (e.code == 'too-many-requests')
         msg = 'Too many attempts. Try again later.';
       return {'success': false, 'message': msg};
+    } catch (e) {
+      await _signOutQuietly();
+      return {'success': false, 'message': friendlyError(e)};
+    }
+  }
+
+  // Change the signed-in user's password. Firebase only accepts a password
+  // change shortly after a sign-in, so re-authenticate with the current
+  // password first — which is also the "current password is correct" check
+  // the screen promises. (Until 2026-09-19 the screen only waited 700 ms and
+  // showed a success dialog; nothing was ever changed — QA H1.)
+  static Future<Map<String, dynamic>> changePassword(
+      String currentPassword, String newPassword) async {
+    final user  = _auth.currentUser;
+    final email = user?.email;
+    if (user == null || email == null) {
+      return {'success': false, 'message': 'Your session has expired. Please sign in again.'};
+    }
+    try {
+      await user.reauthenticateWithCredential(
+          EmailAuthProvider.credential(email: email, password: currentPassword));
+      await user.updatePassword(newPassword);
+      return {'success': true, 'message': 'Password changed.'};
+    } on FirebaseAuthException catch (e) {
+      switch (e.code) {
+        case 'wrong-password':
+        case 'invalid-credential':
+          return {'success': false, 'message': 'Current password is incorrect.'};
+        case 'weak-password':
+          return {'success': false, 'message': 'New password is too weak.'};
+        case 'too-many-requests':
+          return {'success': false, 'message': 'Too many attempts. Try again later.'};
+        case 'requires-recent-login':
+          return {'success': false, 'message': 'Please sign out, sign in again, then retry.'};
+        default:
+          return {'success': false, 'message': e.message ?? 'Could not change password.'};
+      }
     } catch (e) {
       return {'success': false, 'message': friendlyError(e)};
     }
@@ -641,8 +712,13 @@ class ApiService {
         // as it looked when borrowed. ~8 KB.
         if (eqData['photo_thumb'] != null) 'photo_thumb': eqData['photo_thumb'],
         'category':       eqData['category'] ?? '',
-        'borrower_name':  data['borrower_name'] ?? '',
-        'student_number': data['student_number'] ?? '',
+        // Identity comes from the student's own profile, never from form
+        // input: staff read these on every request, penalty and hold screen,
+        // and a typed-in name/ID let a student file under a forged identity
+        // (QA 2026-09-19, H5). The form values are only a fallback for a
+        // profile that could not be read.
+        'borrower_name':  stuData?['name'] ?? data['borrower_name'] ?? '',
+        'student_number': stuData?['student_number'] ?? data['student_number'] ?? '',
         'subject':        data['subject'] ?? '',
         'quantity':       data['quantity'] ?? 1,
         'purpose':        data['purpose'] ?? '',
@@ -702,6 +778,16 @@ class ApiService {
         final data = txDoc.data() as Map<String, dynamic>;
         if (data['status'] == 'Returned') {
           return {'success': false, 'message': 'This item was already returned.'};
+        }
+        // Only an active loan can be returned. A stale list could otherwise
+        // "return" a request that was rejected meanwhile, freeing an item
+        // that is out on someone else's loan.
+        if (data['status'] != 'Approved') {
+          return {
+            'success': false,
+            'message': 'This request is ${data['status'] ?? 'unknown'}, not an '
+                'active loan. Refresh to see the latest.'
+          };
         }
         final equipId = data['equipment_id'] as String;
         tx.update(txRef, {
@@ -923,8 +1009,29 @@ class ApiService {
         if (!txDoc.exists) {
           return {'success': false, 'message': 'Transaction not found.'};
         }
-        final equipId =
-            (txDoc.data() as Map<String, dynamic>)['equipment_id'] as String;
+        final txData = txDoc.data() as Map<String, dynamic>;
+
+        // Only a request that is still Pending can be decided. Staff lists can
+        // be stale (the Dashboard's is a one-shot read), and without this a
+        // second phone could Deny a request another staff member had already
+        // approved — the loan became Rejected while the item stayed Borrowed
+        // with no loan behind it (QA 2026-09-19, H4).
+        final current = (txData['status'] ?? '').toString();
+        if (current != 'Pending') {
+          final by = current == 'Approved'
+              ? '${txData['approved_by_name'] ?? ''}'
+              : current == 'Rejected'
+                  ? '${txData['rejected_by_name'] ?? ''}'
+                  : '';
+          return {
+            'success': false,
+            'already_decided': true,
+            'message': 'This request was already ${current.toLowerCase()}'
+                '${by.isNotEmpty ? ' by $by' : ''}.',
+          };
+        }
+
+        final equipId = txData['equipment_id'] as String;
         final eqRef = _db.collection('equipment').doc(equipId);
 
         if (action == 'approve') {
@@ -1173,13 +1280,16 @@ class ApiService {
 
   // ── Update Profile ────────────────────────────────────────────────────────
   static Future<Map<String, dynamic>> updateProfile({
-    required dynamic studentId,
+    required String studentId,
     required String name,
     required String course,
     required int yearLevel,
   }) async {
+    if (studentId.isEmpty) {
+      return {'success': false, 'message': 'Your session has expired. Please sign in again.'};
+    }
     try {
-      await _db.collection('students').doc('$studentId').update({
+      await _db.collection('students').doc(studentId).update({
         'name':       name,
         'course':     course,
         'year_level': yearLevel,

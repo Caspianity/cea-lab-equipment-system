@@ -183,18 +183,32 @@ class _AdminHomeState extends State<_AdminHome> {
     }
   }
 
+  // Every action reports its outcome and then reloads. These used to ignore
+  // the result, so a refusal (item no longer available, or a request another
+  // staff member already decided) looked like nothing happened, and "marked
+  // as returned!" showed even when the return was refused (QA 2026-09-19, M4).
+  // The reload matters too: this list is a one-shot read and goes stale.
+  void _showResult(Map<String, dynamic> res, String okMessage) {
+    if (!mounted) return;
+    final ok = res['success'] == true;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(ok ? okMessage : (res['message'] ?? 'Action failed.')),
+      backgroundColor: ok ? AppTheme.success : AppTheme.danger,
+      behavior: SnackBarBehavior.floating,
+    ));
+    _load();
+  }
+
   Future<void> _approve(String txId) async {
-    try {
-      await ApiService.updateRequestStatus(txId, 'approve');
-      _load();
-    } catch (_) {}
+    final res = await ApiService.updateRequestStatus(txId, 'approve');
+    _showResult(res, 'Request approved.');
   }
 
   Future<void> _reject(String txId) async {
-    try {
-      await ApiService.updateRequestStatus(txId, 'reject');
-      _load();
-    } catch (_) {}
+    final reason = await showRejectRequestDialog(context);
+    if (reason == null) return;
+    final res = await ApiService.updateRequestStatus(txId, 'reject', reason: reason);
+    _showResult(res, 'Request rejected.');
   }
 
   Future<void> _return(String txId, String equipmentName) async {
@@ -215,16 +229,8 @@ class _AdminHomeState extends State<_AdminHome> {
       ),
     );
     if (confirm == true) {
-      try {
-        await ApiService.returnEquipment(txId, 'Good');
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Equipment marked as returned!'),
-          backgroundColor: AppTheme.success,
-          behavior: SnackBarBehavior.floating,
-        ));
-        _load();
-      } catch (_) {}
+      final res = await ApiService.returnEquipment(txId, 'Good');
+      _showResult(res, 'Equipment marked as returned!');
     }
   }
 

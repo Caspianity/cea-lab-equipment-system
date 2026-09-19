@@ -7,6 +7,7 @@
 
 import 'package:flutter/material.dart';
 
+import '../../services/api_service.dart';
 import '../../theme.dart';
 import '../../widgets/common.dart';
 
@@ -41,20 +42,36 @@ class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
         const SnackBar(content: Text('Please fill in all fields.'), backgroundColor: AppTheme.danger));
       return;
     }
-    if (_newCtrl.text.length < 8) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('New password must be at least 8 characters.'), backgroundColor: AppTheme.danger));
-      return;
-    }
     if (_newCtrl.text != _confirmCtrl.text) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('New passwords do not match.'), backgroundColor: AppTheme.danger));
       return;
     }
+    // Trimmed to match the login screen, which trims what it sends — a
+    // password saved with a trailing space could otherwise never be used.
+    final current = _currentCtrl.text.trim();
+    final next    = _newCtrl.text.trim();
+    if (next.length < 8) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('New password must be at least 8 characters.'), backgroundColor: AppTheme.danger));
+      return;
+    }
+    if (next == current) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('New password must be different from the current one.'), backgroundColor: AppTheme.danger));
+      return;
+    }
     setState(() => _saving = true);
-    await Future.delayed(const Duration(milliseconds: 700));
+    final res = await ApiService.changePassword(current, next);
     if (!mounted) return;
     setState(() => _saving = false);
+    if (res['success'] != true) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(res['message'] ?? 'Could not change password.'),
+          backgroundColor: AppTheme.danger,
+          behavior: SnackBarBehavior.floating));
+      return;
+    }
     showDialog(
       context: context,
       builder: (_) => AlertDialog(

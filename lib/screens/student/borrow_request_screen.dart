@@ -538,13 +538,22 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
               ),
             ),
             const SizedBox(height: 20),
+            // Name and Student ID come from the signed-in account and are
+            // read-only: the request is filed under the profile regardless
+            // (see ApiService.borrowEquipment), so letting them be edited only
+            // invited a forged identity (QA 2026-09-19, H5).
             FieldLabel('Borrower Name'),
             const SizedBox(height: 8),
-            TextField(controller: _nameCtrl, decoration: const InputDecoration(hintText: 'e.g. Juan Santos')),
+            TextField(controller: _nameCtrl, readOnly: true,
+                decoration: const InputDecoration(
+                    suffixIcon: Icon(Icons.lock_outline_rounded, size: 18, color: AppTheme.textMid))),
             const SizedBox(height: 16),
             FieldLabel('Student ID'),
             const SizedBox(height: 8),
-            TextField(controller: _idCtrl, decoration: const InputDecoration(hintText: 'e.g. 26-12345-123')),
+            TextField(controller: _idCtrl, readOnly: true,
+                decoration: const InputDecoration(
+                    suffixIcon: Icon(Icons.lock_outline_rounded, size: 18, color: AppTheme.textMid),
+                    helperText: 'From your account. Change your name in Profile → Edit Profile.')),
             const SizedBox(height: 16),
             FieldLabel('Subject / Section'),
             const SizedBox(height: 8),
