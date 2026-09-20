@@ -18,7 +18,6 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:image/image.dart' as img;
 
-import '../constants.dart';
 import 'session.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -673,28 +672,16 @@ class ApiService {
         };
       }
 
-      // ── Program / course restriction (Prof recommendation #1) ──
-      // Equipment can be tagged with the programs allowed to borrow it. An empty
-      // or absent list means the item is open to every program. Otherwise, a
-      // student may only borrow it if their program is in the allowed list. This
-      // is the authoritative gate — the catalog also hides restricted items, but
-      // this stops a borrow even if the item is reached some other way.
-      final allowedCourses =
-          (eqData['courses'] as List?)?.map((c) => '$c').toList() ?? [];
-      if (allowedCourses.isNotEmpty) {
-        final studentCourse =
-            '${stuData?['course'] ?? data['course'] ?? ''}';
-        if (!allowedCourses.contains(studentCourse)) {
-          return {
-            'success': false,
-            'course_restricted': true,
-            'message': 'This equipment is reserved for '
-                '${allowedCourses.map((c) => courseLabel(c)).join(', ')} '
-                'students and is not available to your program'
-                '${studentCourse.isNotEmpty ? ' (${courseLabel(studentCourse)})' : ''}.',
-          };
-        }
-      }
+      // NOTE (2026-09-20): the program/course restriction that used to sit here
+      // was removed by decision — any student may borrow any item. The
+      // `courses` field is kept and still shown (catalog badge, Equipment
+      // Detail, the staff registration picker), but it is advisory now: it says
+      // which programs an item is intended for, and no longer gates a borrow.
+      // The catalog's "My program only / Show all" chip is likewise only a
+      // convenience filter, which is all it ever was.
+      //
+      // This also closes QA probe P06 — a student editing their own course can
+      // no longer reach anything they could not reach already.
 
       // Honour the student's requested return time, enforcing the same-day
       // 5:00 PM laboratory policy as the latest possible deadline.

@@ -409,17 +409,15 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
               child: const Text('Done'))],
           ));
       } else {
-        // A program/course restriction gets its own clearer presentation; other
-        // failures fall back to the generic error dialog. Either way the full
-        // message is shown so it can be read completely.
-        final restricted = res['course_restricted'] == true;
+        // The full message is shown so it can be read completely. (Until
+        // 2026-09-20 a program/course restriction had its own dialog here; the
+        // restriction was removed, so every failure is a plain error now.)
         showDialog(context: context,
           builder: (_) => AlertDialog(
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-            icon: Icon(
-                restricted ? Icons.school_outlined : Icons.error_outline_rounded,
+            icon: const Icon(Icons.error_outline_rounded,
                 color: AppTheme.danger, size: 48),
-            title: Text(restricted ? 'Not Available to Your Program' : 'Submission Failed'),
+            title: const Text('Submission Failed'),
             content: Text(res['message'] ?? 'Unknown error.',
                 textAlign: TextAlign.center,
                 style: const TextStyle(fontSize: 13)),
