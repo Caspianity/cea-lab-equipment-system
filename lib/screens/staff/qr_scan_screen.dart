@@ -370,8 +370,15 @@ class _QRScanScreenState extends State<QRScanScreen> {
           // Instructions + manual entry
           Column(children: [
             const Spacer(),
-            const Text('Scan equipment QR code to process return',
-                style: TextStyle(color: Colors.white70, fontSize: 13)),
+            // Unconstrained, this line ran off the edge on a narrow screen
+            // (QA 2026-09-19, low #12). Padding plus a centred wrap keeps it
+            // on-screen at any width.
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 24),
+              child: Text('Scan equipment QR code to process return',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.white70, fontSize: 13)),
+            ),
             const SizedBox(height: 220),
             TextButton.icon(
               onPressed: _showManualEntry,

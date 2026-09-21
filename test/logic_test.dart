@@ -296,6 +296,27 @@ void main() {
     });
   });
 
+  // Made public 2026-09-21 so the student Home screen can age out alert cards
+  // without importing cloud_firestore. Firestore Timestamps are covered by the
+  // groups above, which run this through real transaction maps.
+  group('asDate', () {
+    test('parses an ISO string', () {
+      expect(ApiService.asDate('2026-07-20T17:00:00'),
+          DateTime(2026, 7, 20, 17, 0));
+    });
+    test('parses the space-separated form Firestore prints', () {
+      expect(ApiService.asDate('2026-07-20 17:00:00'),
+          DateTime(2026, 7, 20, 17, 0));
+    });
+    test('returns null for null', () {
+      expect(ApiService.asDate(null), isNull);
+    });
+    test('returns null for an unparseable value rather than throwing', () {
+      expect(ApiService.asDate('not a date'), isNull);
+      expect(ApiService.asDate(''), isNull);
+    });
+  });
+
   group('courseLabel', () {
     test('maps known program codes to full names', () {
       expect(courseLabel('CE'), 'Civil Engineering');

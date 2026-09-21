@@ -6,6 +6,7 @@
 // -----------------------------------------------------------------------------
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 
 import '../../theme.dart';
 
@@ -157,8 +158,23 @@ class _HelpFaqScreenState extends State<HelpFaqScreen> {
                 Text('Still need help?', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppTheme.textDark)),
                 Text('cea.lab@neu.edu.ph', style: TextStyle(fontSize: 12, color: AppTheme.textMid)),
               ])),
+              // This button did nothing at all (QA 2026-09-19, low #1). There
+              // is no mail plugin in the dependency list and adding one for a
+              // single button is not worth it, so it copies the address the
+              // row already shows — which is what a student needs to write in.
               TextButton(
-                onPressed: () {},
+                onPressed: () async {
+                  await Clipboard.setData(
+                      const ClipboardData(text: 'cea.lab@neu.edu.ph'));
+                  if (!context.mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                    content: Text('cea.lab@neu.edu.ph copied. Send us an '
+                        'e-mail and we will get back to you.'),
+                    backgroundColor: AppTheme.success,
+                    behavior: SnackBarBehavior.floating,
+                    duration: Duration(seconds: 4),
+                  ));
+                },
                 child: const Text('Contact Us', style: TextStyle(color: AppTheme.primary, fontWeight: FontWeight.bold)),
               ),
             ]),

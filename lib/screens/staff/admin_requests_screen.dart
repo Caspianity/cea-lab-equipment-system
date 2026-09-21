@@ -25,6 +25,13 @@ class _AdminRequestsScreenState extends State<AdminRequestsScreen> {
   // status changes render immediately — no manual refresh.
   late final Stream<List<dynamic>> _stream = ApiService.requestsStream();
 
+  // True when this loan's due date has gone by. Uses the shared parser so an
+  // ISO string and a raw Firestore Timestamp are both handled.
+  bool _isPastDue(dynamic e) {
+    final due = ApiService.asDate(e['due_date']);
+    return due != null && due.isBefore(DateTime.now());
+  }
+
   Color _statusColor(String s) {
     switch (s) {
       case 'Pending':  return AppTheme.accent;
@@ -72,7 +79,13 @@ class _AdminRequestsScreenState extends State<AdminRequestsScreen> {
 
   Widget _buildCard(dynamic e, {bool showActions = false}) {
     final status = e['status'] ?? '';
-    final sc = _statusColor(status);
+    // An Approved loan that is past its due date is overdue, and the badge
+    // used to say plain "Approved" in green — so the Approved tab gave staff
+    // no way to spot a late loan (QA 2026-09-19, low #8). The stored status
+    // is unchanged; only the badge tells the truth about it.
+    final isOverdue = status == 'Approved' && _isPastDue(e);
+    final label = isOverdue ? 'Overdue' : status;
+    final sc = isOverdue ? AppTheme.danger : _statusColor(status);
     final txId = '${e['transaction_id']}';
     final studentName = e['borrower_name'] ?? e['student_number'] ?? '';
     return Container(
@@ -93,7 +106,7 @@ class _AdminRequestsScreenState extends State<AdminRequestsScreen> {
               Text(studentName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppTheme.textDark)),
               Text('ID: ${e['student_number'] ?? ''}', style: const TextStyle(fontSize: 11, color: AppTheme.textMid)),
             ])),
-            StatusBadge(label: status, color: sc),
+            StatusBadge(label: label, color: sc),
           ]),
           const SizedBox(height: 10),
           Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -182,7 +195,10 @@ class _AdminRequestsScreenState extends State<AdminRequestsScreen> {
           length: 3,
           child: Scaffold(
             appBar: AppBar(
-              title: const Text('Requests'),
+              // No title: the staff shell's AppBar already shows the tab name,
+              // so "Requests" appeared twice, stacked (QA 2026-09-19, low #12).
+              // This bar exists only to host the tabs.
+              toolbarHeight: 0,
               bottom: const TabBar(
                 indicatorColor: AppTheme.accent, labelColor: Colors.white,
                 unselectedLabelColor: AppTheme.textLight,

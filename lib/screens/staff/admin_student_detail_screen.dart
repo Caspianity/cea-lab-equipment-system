@@ -323,7 +323,14 @@ class _AdminStudentDetailScreenState extends State<AdminStudentDetailScreen> {
           Text('${e['equipment_name'] ?? 'Equipment'}',
               style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textDark)),
           if (borrow.isNotEmpty)
-            Text('Borrowed: $borrow',
+            // The date is when the row was filed, which is only a borrow date
+            // once staff approved it. Pending and Rejected rows used to read
+            // "Borrowed:" for equipment the student never received
+            // (QA 2026-09-19, low #12).
+            Text(
+                status == 'Pending' || status == 'Rejected'
+                    ? 'Requested: $borrow'
+                    : 'Borrowed: $borrow',
                 style: const TextStyle(fontSize: 11, color: AppTheme.textMid)),
         ])),
         StatusBadge(label: status, color: color),

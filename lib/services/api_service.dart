@@ -480,12 +480,23 @@ class ApiService {
   // the number, billed per ~1000 documents scanned rather than per document
   // read. This keeps the summary accurate over the whole inventory while the
   // list below it is paginated.
-  static Future<({int total, int available})> getEquipmentCounts() async {
+  // `borrowed` is counted on its own rather than inferred as "everything that
+  // is not Available": the Inventory header used to show total − available
+  // under a "Borrowed" label, which silently folded in Under Repair and For
+  // Disposal items and read 6 when 3 things were out (QA 2026-09-19, low #6).
+  static Future<({int total, int available, int borrowed})>
+      getEquipmentCounts() async {
     final col = _db.collection('equipment');
     final totalSnap = await col.count().get();
     final availSnap =
         await col.where('status', isEqualTo: 'Available').count().get();
-    return (total: totalSnap.count ?? 0, available: availSnap.count ?? 0);
+    final borrowSnap =
+        await col.where('status', isEqualTo: 'Borrowed').count().get();
+    return (
+      total:     totalSnap.count ?? 0,
+      available: availSnap.count ?? 0,
+      borrowed:  borrowSnap.count ?? 0,
+    );
   }
 
   static Future<Map<String, dynamic>> getEquipmentByQr(String qrCode) async {
@@ -748,6 +759,34 @@ class ApiService {
           'success': false,
           'message': 'Equipment is currently ${eqData['status']}.'
         };
+      }
+
+      // ── One pending request per item per student (QA 2026-09-19, low #3) ──
+      // Tapping Submit twice, or coming back to the form later, used to file a
+      // second Pending row for the same item. Staff then saw the same student
+      // queued twice for one physical unit, and approving both is exactly the
+      // double-loan that strands an item (see M5). A student cannot withdraw a
+      // request themselves — the rules only let staff update a transaction —
+      // so the duplicate had to be rejected by hand.
+      if (sid.isNotEmpty) {
+        // Single-field query (no composite index needed); filter in Dart —
+        // the same shape the rest of this file uses.
+        final dupes = await _db
+            .collection('borrow_transactions')
+            .where('student_id', isEqualTo: sid)
+            .get();
+        final pending = dupes.docs.where((d) =>
+            d.data()['status'] == 'Pending' &&
+            '${d.data()['equipment_id']}' == equipId);
+        if (pending.isNotEmpty) {
+          return {
+            'success': false,
+            'duplicate': true,
+            'message': 'You already have a pending request for '
+                '${eqData['equipment_name'] ?? 'this item'}. Please wait for '
+                'laboratory staff to act on it.',
+          };
+        }
       }
 
       // NOTE (2026-09-20): the program/course restriction that used to sit here
@@ -1305,7 +1344,9 @@ class ApiService {
 
   // Parse a transaction date field that may be an ISO string (borrow/due, as
   // mapped) or a raw Firestore Timestamp (return_date isn't pre-converted).
-  static DateTime? _asDate(dynamic v) {
+  // Public because the student Home screen needs the same parsing to work out
+  // how old an alert card is, and screens do not import cloud_firestore.
+  static DateTime? asDate(dynamic v) {
     if (v == null) return null;
     if (v is Timestamp) return v.toDate();
     return DateTime.tryParse('$v'.replaceAll(' ', 'T'));
@@ -1325,11 +1366,11 @@ class ApiService {
     var loans = 0, late = 0, overdue = 0, damages = 0, active = 0;
     for (final t in txns) {
       final status = '${t['status'] ?? ''}';
-      final due = _asDate(t['due_date']);
+      final due = asDate(t['due_date']);
       if (status == 'Approved' || status == 'Returned') loans++;
       if (status == 'Approved') active++;
       if (status == 'Returned') {
-        final ret = _asDate(t['return_date']);
+        final ret = asDate(t['return_date']);
         if (due != null && ret != null && ret.isAfter(due)) late++;
         final cond = '${t['condition_returned'] ?? ''}';
         if (cond == 'Damaged' ||
@@ -1379,10 +1420,10 @@ class ApiService {
       borrowings++;
       final name = '${t['equipment_name'] ?? 'Unknown'}';
       perItem[name] = (perItem[name] ?? 0) + 1;
-      final due = _asDate(t['due_date']);
+      final due = asDate(t['due_date']);
       if (status == 'Returned') {
         returned++;
-        final ret = _asDate(t['return_date']);
+        final ret = asDate(t['return_date']);
         // A return with no recorded date cannot be shown to be late, so it is
         // not held against the student.
         if (due == null || ret == null || !ret.isAfter(due)) onTime++;
@@ -1408,7 +1449,7 @@ class ApiService {
     final ref = now ?? DateTime.now();
     return txns.where((t) {
       if ('${t['status'] ?? ''}' != 'Approved') return false;
-      final due = _asDate(t['due_date']);
+      final due = asDate(t['due_date']);
       return due != null && due.isBefore(ref);
     }).toList();
   }

@@ -48,16 +48,102 @@ class _AdminDamageReportsScreenState extends State<AdminDamageReportsScreen> {
     }
   }
 
+  // Resolving a report used to do exactly one thing: flip its status. The item
+  // stayed Under Repair and the borrower stayed on hold, so "resolved" meant
+  // staff still had two more screens to visit and it was easy to forget one
+  // (QA 2026-09-19, low #7). `updateDamageReport` already accepted the
+  // equipment status — nothing ever passed it. Both follow-ups are offered
+  // here, ticked by default, and staff can untick either.
   Future<void> _resolve(Map<String, dynamic> r) async {
-    final res = await ApiService.updateDamageReport('${r['report_id']}', 'Resolved');
+    final equipId = '${r['equipment_id'] ?? ''}';
+    final sid     = '${r['student_id'] ?? ''}';
+    final eqName  = '${r['equipment_name'] ?? 'the equipment'}';
+    final who     = '${r['borrower_name'] ?? 'the borrower'}';
+    var freeEquipment = equipId.isNotEmpty;
+    var liftHold      = sid.isNotEmpty;
+
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (dctx) => StatefulBuilder(
+        builder: (_, setLocal) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text('Resolve Damage Report'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Mark this report as resolved. You can also finish '
+                  'the clean-up in the same step:',
+                  style: TextStyle(fontSize: 13)),
+              const SizedBox(height: 8),
+              if (equipId.isNotEmpty)
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  dense: true,
+                  value: freeEquipment,
+                  onChanged: (v) => setLocal(() => freeEquipment = v ?? false),
+                  title: Text('Return $eqName to Available',
+                      style: const TextStyle(fontSize: 13)),
+                ),
+              if (sid.isNotEmpty)
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  dense: true,
+                  value: liftHold,
+                  onChanged: (v) => setLocal(() => liftHold = v ?? false),
+                  title: Text("Lift $who's borrowing hold",
+                      style: const TextStyle(fontSize: 13)),
+                ),
+            ],
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(dctx, false),
+                child: const Text('Cancel')),
+            ElevatedButton(
+                onPressed: () => Navigator.pop(dctx, true),
+                child: const Text('Resolve')),
+          ],
+        ),
+      ),
+    );
+    if (go != true || !mounted) return;
+
+    final res = await ApiService.updateDamageReport(
+      '${r['report_id']}',
+      'Resolved',
+      equipmentId: freeEquipment ? equipId : null,
+      equipmentStatus: freeEquipment ? 'Available' : null,
+    );
+    // The hold is a separate document, so a failure there must not be hidden
+    // behind the report's own success.
+    String? holdError;
+    if (res['success'] == true && liftHold) {
+      final h = await ApiService.setStudentHold(sid, false);
+      if (h['success'] != true) holdError = '${h['message'] ?? 'unknown error'}';
+    }
     if (!mounted) return;
     if (res['success'] == true) _load();
+
+    final done = <String>[
+      'Report resolved',
+      if (freeEquipment && res['success'] == true) '$eqName is Available',
+      if (liftHold && holdError == null && res['success'] == true)
+        "$who's hold lifted",
+    ];
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(res['success'] == true
-          ? 'Report marked resolved.'
-          : (res['message'] ?? 'Failed.')),
-      backgroundColor: res['success'] == true ? AppTheme.success : AppTheme.danger,
+      content: Text(res['success'] != true
+          ? '${res['message'] ?? 'Failed.'}'
+          : holdError != null
+              ? '${done.join(' · ')}, but the hold could not be lifted: $holdError'
+              : '${done.join(' · ')}.'),
+      backgroundColor: res['success'] == true && holdError == null
+          ? AppTheme.success
+          : AppTheme.danger,
       behavior: SnackBarBehavior.floating,
+      duration: const Duration(seconds: 5),
     ));
   }
 

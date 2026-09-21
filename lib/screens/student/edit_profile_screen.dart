@@ -124,16 +124,11 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                             fontSize: 34,
                             fontWeight: FontWeight.bold)),
                   ),
-                  Positioned(
-                    bottom: 0, right: 0,
-                    child: Container(
-                      width: 32, height: 32,
-                      decoration: const BoxDecoration(
-                          color: AppTheme.primary, shape: BoxShape.circle),
-                      child: const Icon(Icons.camera_alt_rounded,
-                          color: Colors.white, size: 16),
-                    ),
-                  ),
+                  // A camera badge used to sit here with no handler behind it,
+                  // offering a profile photo the app has never supported —
+                  // students are identified by their initials and student
+                  // number (QA 2026-09-19, low #1). Removed rather than wired
+                  // up: student avatars are not part of the system.
                 ],
               ),
             ),

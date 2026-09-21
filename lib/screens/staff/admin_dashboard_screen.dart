@@ -599,6 +599,13 @@ class _AdminHomeState extends State<_AdminHome> {
                           final name = e['borrower_name'] ?? e['student_number'] ?? 'Student';
                           final equipName = e['equipment_name'] ?? 'Equipment';
                           final dueDate = (e['due_date'] ?? '').toString().split('T').first;
+                          // Every active loan was badged a green "Active",
+                          // including ones already past due, so the Dashboard
+                          // gave staff no way to see which (QA 2026-09-19,
+                          // low #8). The stored status is unchanged.
+                          final due = ApiService.asDate(e['due_date']);
+                          final isOverdue =
+                              due != null && due.isBefore(DateTime.now());
                           return Padding(
                             padding: const EdgeInsets.only(bottom: 10),
                             child: Container(
@@ -626,7 +633,11 @@ class _AdminHomeState extends State<_AdminHome> {
                                     Text('$name  •  Due: $dueDate',
                                         style: const TextStyle(fontSize: 11, color: AppTheme.textMid)),
                                   ])),
-                                  StatusBadge(label: 'Active', color: AppTheme.success),
+                                  StatusBadge(
+                                      label: isOverdue ? 'Overdue' : 'Active',
+                                      color: isOverdue
+                                          ? AppTheme.danger
+                                          : AppTheme.success),
                                 ]),
                                 if (Session.canManage) ...[
                                   const SizedBox(height: 12),

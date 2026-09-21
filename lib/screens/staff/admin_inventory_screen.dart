@@ -54,6 +54,7 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
   bool _loadingMore = false;
   int _totalItems = 0;
   int _availableItems = 0;
+  int _borrowedItems  = 0;
 
   @override
   void initState() {
@@ -96,6 +97,7 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
         _hasMore = page.hasMore;
         _totalItems = counts.total;
         _availableItems = counts.available;
+        _borrowedItems  = counts.borrowed;
         _loading = false;
       });
     } catch (_) {
@@ -259,8 +261,11 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
     // Counted server-side over the whole collection — the list below is only a
     // page of it, so these cannot be derived from _equipment.
     final totalItems       = _totalItems;
-    final availableItems   = _availableItems;
-    final unavailableItems = totalItems - availableItems;
+    final availableItems = _availableItems;
+    // Counted on its own, not as total − available: that folded Under Repair
+    // and For Disposal into a tile labelled "Borrowed" and read 6 when 3
+    // things were actually out (QA 2026-09-19, low #6).
+    final borrowedItems = _borrowedItems;
 
     // An active search or category can hide everything loaded so far while
     // matches remain further down the collection; pull more until the list
@@ -286,7 +291,7 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
                     const SizedBox(width: 10),
                     _InvStat(label: 'Available', value: '$availableItems', icon: Icons.check_circle_outline_rounded, color: AppTheme.success),
                     const SizedBox(width: 10),
-                    _InvStat(label: 'Borrowed', value: '$unavailableItems', icon: Icons.remove_circle_outline_rounded, color: AppTheme.danger),
+                    _InvStat(label: 'Borrowed', value: '$borrowedItems', icon: Icons.remove_circle_outline_rounded, color: AppTheme.danger),
                   ],
                 ),
                 const SizedBox(height: 12),

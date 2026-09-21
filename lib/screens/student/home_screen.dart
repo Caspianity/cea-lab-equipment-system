@@ -11,6 +11,7 @@ import '../../services/notif_prefs.dart';
 import '../../services/session.dart';
 import '../../theme.dart';
 import '../../widgets/common.dart';
+import 'alerts_screen.dart';
 import 'equipment_catalog_screen.dart';
 import 'borrow_request_screen.dart';
 import 'damage_report_screen.dart';
@@ -148,7 +149,31 @@ class _StudentDashboardState extends State<_StudentDashboard> {
   }).length;
 
   // Build notification cards from live loan statuses
+  // How long a one-off alert stays on Home. Overdue and Due Today are live
+  // state and never expire; the acknowledgements below do, so a week-old
+  // "Return Confirmed" stops crowding out today's news. The bell still opens
+  // the full list (QA 2026-09-19, low #9).
+  static const _alertMaxAge = Duration(days: 7);
+
+  // Every alert this student has, newest first — what the bell opens.
+  List<Map<String, dynamic>> get _allNotifications {
+    final notes = _buildNotifications();
+    notes.sort((a, b) =>
+        (b['at'] as DateTime).compareTo(a['at'] as DateTime));
+    return notes;
+  }
+
+  // What Home shows: live state always, acknowledgements only while recent.
   List<Map<String, dynamic>> get _notifications {
+    final now = DateTime.now();
+    return _allNotifications
+        .where((n) =>
+            n['live'] == true ||
+            now.difference(n['at'] as DateTime) <= _alertMaxAge)
+        .toList();
+  }
+
+  List<Map<String, dynamic>> _buildNotifications() {
     final notes = <Map<String, dynamic>>[];
     for (final loan in _allLoans) {
       final status   = loan['status'] ?? '';
@@ -170,6 +195,8 @@ class _StudentDashboardState extends State<_StudentDashboard> {
             'color': AppTheme.danger,
             'title': 'Overdue!',
             'body':  '$equipName was due on ${due.month}/${due.day}. Please return it immediately.',
+            'at':    due,
+            'live':  true,
           });
         } else if (NotifPrefs.dueSoon &&
             due.year == now.year && due.month == now.month && due.day == now.day) {
@@ -178,6 +205,8 @@ class _StudentDashboardState extends State<_StudentDashboard> {
             'color': AppTheme.warning,
             'title': 'Due Today',
             'body':  '$equipName is due back today before 5:00 PM.',
+            'at':    due,
+            'live':  true,
           });
         }
       }
@@ -192,6 +221,7 @@ class _StudentDashboardState extends State<_StudentDashboard> {
           'color': AppTheme.success,
           'title': 'Request Approved',
           'body':  'Your request for $equipName has been approved.',
+          'at':    ApiService.asDate(loan['approved_at']) ?? due,
         });
       }
       if (NotifPrefs.rejected && status == 'Rejected') {
@@ -200,6 +230,8 @@ class _StudentDashboardState extends State<_StudentDashboard> {
           'color': AppTheme.danger,
           'title': 'Request Rejected',
           'body':  'Your request for $equipName was rejected by staff.',
+          'at':    ApiService.asDate(loan['rejected_at']) ??
+                   ApiService.asDate(loan['borrow_date']) ?? DateTime(2000),
         });
       }
       if (NotifPrefs.returnConfirmed && status == 'Returned') {
@@ -208,6 +240,8 @@ class _StudentDashboardState extends State<_StudentDashboard> {
           'color': AppTheme.success,
           'title': 'Return Confirmed',
           'body':  'Your return of $equipName has been confirmed by staff.',
+          'at':    ApiService.asDate(loan['return_date']) ??
+                   ApiService.asDate(loan['borrow_date']) ?? DateTime(2000),
         });
       }
     }
@@ -288,9 +322,17 @@ class _StudentDashboardState extends State<_StudentDashboard> {
                                           fontSize: 9)),
                                     ]),
                                 ]),
-                                // Notification bell
+                                // Notification bell. It carried a red dot
+                                // whenever an alert existed but did nothing
+                                // when tapped (QA 2026-09-19, low #1); it now
+                                // opens the full list, which is also the only
+                                // way to see past the three cards Home shows.
                                 GestureDetector(
-                                  onTap: () {},
+                                  onTap: () => Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                          builder: (_) => StudentAlertsScreen(
+                                              alerts: _allNotifications))),
                                   child: Stack(children: [
                                     Container(
                                       width: 38, height: 38,
@@ -300,7 +342,7 @@ class _StudentDashboardState extends State<_StudentDashboard> {
                                       ),
                                       child: const Icon(Icons.notifications_outlined,
                                           color: Colors.white, size: 20)),
-                                    if (_notifications.isNotEmpty)
+                                    if (_allNotifications.isNotEmpty)
                                       Positioned(top: 6, right: 6,
                                         child: Container(
                                           width: 8, height: 8,
@@ -478,8 +520,28 @@ class _StudentDashboardState extends State<_StudentDashboard> {
 
                       // ── Alerts / Notifications ──────────────────────────
                       if (_notifications.isNotEmpty) ...[
-                        SectionTitle(title: 'Alerts', icon: Icons.notifications_active_rounded,
-                            color: const Color(0xFFEF4444)),
+                        Row(children: [
+                          const Expanded(
+                            child: SectionTitle(title: 'Alerts',
+                                icon: Icons.notifications_active_rounded,
+                                color: Color(0xFFEF4444)),
+                          ),
+                          // Home shows three; this and the bell are the only
+                          // ways to the rest (QA 2026-09-19, low #9).
+                          if (_allNotifications.length > 3)
+                            TextButton(
+                              onPressed: () => Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                      builder: (_) => StudentAlertsScreen(
+                                          alerts: _allNotifications))),
+                              child: const Text('See all',
+                                  style: TextStyle(
+                                      color: AppTheme.accent,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 12)),
+                            ),
+                        ]),
                         const SizedBox(height: 10),
                         ..._notifications.take(3).map((n) => Padding(
                           padding: const EdgeInsets.only(bottom: 8),
