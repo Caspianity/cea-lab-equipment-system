@@ -275,7 +275,13 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
       initialTime: _borrowTime,
       helpText: 'Select Borrow Time',
     );
-    if (picked != null) setState(() => _borrowTime = picked);
+    if (picked == null) return;
+    if (_minutes(picked) >= _minutes(_returnTime)) {
+      _warn('Borrow time must be earlier than the return time '
+          '(${_formatTime(_returnTime)}).');
+      return;
+    }
+    setState(() => _borrowTime = picked);
   }
 
   Future<void> _pickReturnTime() async {
@@ -289,17 +295,30 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
       final maxReturn = const TimeOfDay(hour: 17, minute: 0);
       if (picked.hour > 17 || (picked.hour == 17 && picked.minute > 0)) {
         setState(() => _returnTime = maxReturn);
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Return time cannot be later than 5:00 PM.'),
-            backgroundColor: AppTheme.warning,
-            behavior: SnackBarBehavior.floating,
-          ));
-        }
+        _warn('Return time cannot be later than 5:00 PM.');
+      } else if (_minutes(picked) <= _minutes(_borrowTime)) {
+        // A return before the borrow time is not a loan period, and one
+        // already in the past is overdue the moment staff approve it
+        // (QA 2026-09-19, M3). Refuse it instead of storing it.
+        _warn('Return time must be later than the borrow time '
+            '(${_formatTime(_borrowTime)}).');
       } else {
         setState(() => _returnTime = picked);
       }
     }
+  }
+
+  // Minutes since midnight — the borrow and return times are always on the
+  // same day under the same-day policy, so comparing them needs nothing more.
+  int _minutes(TimeOfDay t) => t.hour * 60 + t.minute;
+
+  void _warn(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(message),
+      backgroundColor: AppTheme.warning,
+      behavior: SnackBarBehavior.floating,
+    ));
   }
 
   @override
@@ -382,6 +401,26 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
       );
       return;
     }
+    // A deadline that has already gone by makes the loan overdue the moment
+    // staff approve it, so the request is refused here rather than stored
+    // (QA 2026-09-19, M3). Under the same-day 5:00 PM policy that also means
+    // nothing can be borrowed once 5:00 PM has passed.
+    final nowTime = TimeOfDay.now();
+    if (_minutes(nowTime) >= 17 * 60) {
+      _warn('Borrowing is closed for today — all equipment is due back by '
+          '5:00 PM. Please file the request tomorrow.');
+      return;
+    }
+    if (_minutes(_returnTime) <= _minutes(_borrowTime)) {
+      _warn('Return time must be later than the borrow time '
+          '(${_formatTime(_borrowTime)}).');
+      return;
+    }
+    if (_minutes(_returnTime) <= _minutes(nowTime)) {
+      _warn('Return time ${_formatTime(_returnTime)} has already passed. '
+          'Please choose a later time.');
+      return;
+    }
     setState(() => _loading = true);
     try {
       final res = await ApiService.borrowEquipment({
@@ -402,7 +441,11 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
             icon: const Icon(Icons.check_circle_rounded, color: AppTheme.success, size: 52),
             title: const Text('Request Submitted!'),
-            content: const Text('Your borrowing request has been submitted and is awaiting staff approval. Please return the equipment before 5:00 PM today.',
+            // The deadline the student actually chose — this used to read
+            // "before 5:00 PM" whatever was picked (QA 2026-09-19, M3).
+            content: Text('Your borrowing request has been submitted and is '
+                'awaiting staff approval. Please return the equipment by '
+                '${_formatTime(_returnTime)} today.',
                 textAlign: TextAlign.center),
             actions: [ElevatedButton(
               onPressed: () { Navigator.pop(context); Navigator.pop(context); },

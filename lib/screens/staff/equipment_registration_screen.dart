@@ -108,6 +108,11 @@ class _EquipmentRegistrationScreenState
         'model':          _modelCtrl.text.trim(),
         'serial_number':  _serialCtrl.text.trim(),
         'qr_code':        _generatedQr,
+        // The Condition field is required on this form but used to be dropped
+        // on the way out, so every item was stored Available — a scope
+        // registered as For Disposal was immediately borrowable (QA
+        // 2026-09-19, M1).
+        'condition':      _selectedCondition,
       });
       if (!mounted) return;
       if (res['success'] == true) {
@@ -126,7 +131,10 @@ class _EquipmentRegistrationScreenState
           'equipment_name': _nameCtrl.text.trim(),
           'qr_code':        res['qr_code'] ?? _generatedId,
           'category':       _selectedCategory,
-          'status':         'Available',
+          // Whatever was actually stored, not an assumption — the inventory
+          // list this pops back to shows this badge straight away.
+          'status':         res['status'] ?? 'Available',
+          'condition':      _selectedCondition,
           'location':       _locationCtrl.text.trim(),
         });
         if (photoError != null) {

@@ -63,42 +63,20 @@ class _AdminReportsScreenState extends State<AdminReportsScreen> {
       final eqCounts      = await eqF;
       final damageReports = await damageF;
 
-      // Count borrowing stats
-      final now = DateTime.now();
-      int returned = 0, overdue = 0;
-
-      // Count most borrowed equipment
-      final Map<String, int> borrowCount = {};
-      for (final tx in txSnap) {
-        final eqName = tx['equipment_name'] as String? ?? 'Unknown';
-        borrowCount[eqName] = (borrowCount[eqName] ?? 0) + 1;
-
-        if (tx['status'] == 'Returned') {
-          returned++;
-        }
-        if (tx['status'] == 'Approved') {
-          final due = DateTime.tryParse(
-              '${tx['due_date']}'.replaceAll(' ', 'T'));
-          if (due != null && due.isBefore(now)) overdue++;
-        }
-      }
-
-      // Sort most borrowed descending
-      final sorted = borrowCount.entries.toList()
-        ..sort((a, b) => b.value.compareTo(a.value));
-      final top4 = Map.fromEntries(sorted.take(4));
-
-      final total = txSnap.length;
-      final onTime = total > 0 ? (returned / total * 100) : 0.0;
+      // Borrowing stats. The counting rules live in ApiService.reportMetrics so
+      // they are unit-tested rather than done by hand here — the hand-rolled
+      // version counted Pending and Rejected requests as borrowings and worked
+      // out "on time" without ever looking at a return date (QA 2026-09-19, M2).
+      final m = ApiService.reportMetrics(txSnap);
 
       setState(() {
-        _totalBorrowings  = total;
-        _totalReturned    = returned;
-        _totalOverdue     = overdue;
+        _totalBorrowings  = m['borrowings'] as int;
+        _totalReturned    = m['returned'] as int;
+        _totalOverdue     = m['overdue'] as int;
         _totalDamage      = damageReports;
         _totalEquipment   = eqCounts.total;
-        _onTimeRate       = onTime;
-        _mostBorrowed     = top4;
+        _onTimeRate       = m['onTimeRate'] as double;
+        _mostBorrowed     = m['mostBorrowed'] as Map<String, int>;
         _allTransactions  = txSnap;
         _loading          = false;
       });

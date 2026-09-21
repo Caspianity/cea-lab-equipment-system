@@ -556,7 +556,8 @@ class _EditEquipmentSheetState extends State<_EditEquipmentSheet> {
         setState(() => _saving = false);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             content: Text(res['message'] ?? 'Update failed.'),
-            backgroundColor: AppTheme.danger));
+            backgroundColor: AppTheme.danger,
+            duration: const Duration(seconds: 6)));
       }
     } catch (_) {
       if (mounted) {

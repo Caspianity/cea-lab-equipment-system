@@ -18,6 +18,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:image/image.dart' as img;
 
+import '../constants.dart';
 import 'session.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -125,15 +126,25 @@ class ApiService {
       String identifier, String password, String role) async {
     try {
       if (role == 'student') {
-        // Students sign in with their student number. Resolve it to an email via
-        // the public lookup index — this works BEFORE authentication, unlike a
-        // query on the protected `students` collection (see firestore.rules).
-        final lookup =
-            await _db.collection('student_lookup').doc(identifier).get();
-        if (!lookup.exists) {
-          return {'success': false, 'message': 'Student ID not found.'};
+        // The field is labelled "Student ID / Email", so both have to work. An
+        // address used to be sent to the lookup index and bounce with "Student
+        // ID not found." (QA 2026-09-19, M7); anything containing '@' is now
+        // taken as the e-mail itself and skips the lookup.
+        String email;
+        if (identifier.contains('@')) {
+          email = identifier;
+        } else {
+          // Students sign in with their student number. Resolve it to an email
+          // via the public lookup index — this works BEFORE authentication,
+          // unlike a query on the protected `students` collection (see
+          // firestore.rules).
+          final lookup =
+              await _db.collection('student_lookup').doc(identifier).get();
+          if (!lookup.exists) {
+            return {'success': false, 'message': 'Student ID not found.'};
+          }
+          email = lookup.data()!['email'] as String;
         }
-        final email = lookup.data()!['email'] as String;
         await _auth.signInWithEmailAndPassword(email: email, password: password);
         final uid = _auth.currentUser!.uid;
         // Profile is read BEFORE the verification gate: the grandfather check
@@ -506,12 +517,23 @@ class ApiService {
           : category.toUpperCase();
       final suffix  = DateTime.now().millisecondsSinceEpoch.toString().substring(7);
       final qrCode  = provided.isNotEmpty ? provided : '$prefix-$suffix';
+      // The condition chosen at registration decides the starting status, so an
+      // item registered as Under Repair / For Disposal is not immediately
+      // borrowable (QA 2026-09-19, M1 — this used to be hard-coded Available).
+      // 'Borrowed' is never a valid starting status: a brand-new item is not on
+      // loan, so anything unrecognised falls back to Available.
+      final condition = (data['condition'] as String?)?.trim() ?? '';
+      final requested = (data['status'] as String?)?.trim() ?? '';
+      final status = kStatuses.contains(requested) && requested != 'Borrowed'
+          ? requested
+          : equipmentStatusForCondition(condition);
       final ref = await _db.collection('equipment').add({
         'equipment_name': name,
         'category':       category,
         'location':       location,
         'qr_code':        qrCode,
-        'status':         'Available',
+        'status':         status,
+        if (condition.isNotEmpty) 'condition': condition,
         'courses':        (data['courses'] as List?)?.cast<String>() ?? [],
         'description':    data['description'] ?? '',
         'brand':          data['brand'] ?? '',
@@ -526,6 +548,7 @@ class ApiService {
         'message':      'Equipment added successfully.',
         'equipment_id': ref.id,
         'qr_code':      qrCode,
+        'status':       status,
       };
     } catch (e) {
       return {'success': false, 'message': friendlyError(e)};
@@ -535,6 +558,31 @@ class ApiService {
   static Future<Map<String, dynamic>> updateEquipment(
       String equipmentId, Map<String, dynamic> data) async {
     try {
+      // An item that is out on an approved loan has to stay 'Borrowed'.
+      // Setting it back to Available let staff approve a SECOND loan for the
+      // same physical unit; the QR return then found two active loans and
+      // refused to complete either, stranding both (QA 2026-09-19, M5).
+      final status = data['status'] as String?;
+      if (status != null && status != 'Borrowed') {
+        // Single-field query (no composite index needed); filter in Dart.
+        final snap = await _db
+            .collection('borrow_transactions')
+            .where('equipment_id', isEqualTo: equipmentId)
+            .get();
+        final active = snap.docs
+            .where((d) => (d.data())['status'] == 'Approved')
+            .toList();
+        if (active.isNotEmpty) {
+          final who = '${active.first.data()['borrower_name'] ?? ''}'.trim();
+          return {
+            'success': false,
+            'on_loan': true,
+            'message': 'This item is still out on loan'
+                '${who.isEmpty ? '' : ' to $who'}. Mark it as returned from '
+                'the Dashboard before changing its status.',
+          };
+        }
+      }
       await _db.collection('equipment').doc(equipmentId).update(data);
       return {'success': true};
     } catch (e) {
@@ -659,6 +707,36 @@ class ApiService {
         };
       }
 
+      // ── Overdue gate (QA 2026-09-19, M6) ──
+      // The Home banner ("…before borrowing again") and the Lab Policies screen
+      // ("Late returns lose borrowing privileges") both promise this, but until
+      // now only a staff-placed hold blocked anything, so a student could sit
+      // on two overdue items and keep borrowing. Holding an item past its due
+      // date now closes new loans until it is back.
+      if (sid.isNotEmpty) {
+        final mine = await _db
+            .collection('borrow_transactions')
+            .where('student_id', isEqualTo: sid)
+            .get();
+        final late = overdueLoans(mine.docs.map((d) => d.data()).toList());
+        if (late.isNotEmpty) {
+          final names =
+              late.map((t) => '${t['equipment_name'] ?? 'an item'}').toSet();
+          final listed = names.take(3).join(', ');
+          final one = late.length == 1;
+          return {
+            'success': false,
+            'overdue': true,
+            'overdue_count': late.length,
+            'message': 'You have ${late.length} overdue '
+                '${one ? 'item' : 'items'} ($listed'
+                '${names.length > 3 ? ', …' : ''}). Please return '
+                '${one ? 'it' : 'them'} to the laboratory before borrowing '
+                'again.',
+          };
+        }
+      }
+
       // Check equipment is Available
       final eqDoc = await _db.collection('equipment').doc(equipId).get();
       if (!eqDoc.exists) {
@@ -727,18 +805,26 @@ class ApiService {
   // Same-day 5:00 PM due-date policy: a requested time at or before 17:00 is
   // honoured (on today's date); anything later — or no request — clamps to
   // 17:00. Public and pure so the policy is unit-testable (see test/).
+  //
+  // A requested time that has already passed is not a deadline at all, so it
+  // falls back to the 17:00 default instead of being stored as-is. The form
+  // refuses one up front with a clear message; this is the backstop that keeps
+  // a loan from being overdue the instant it is approved (QA 2026-09-19, M3).
   static DateTime computeDueDate(DateTime now, DateTime? requested) {
     if (requested != null &&
         !(requested.hour > 17 ||
             (requested.hour == 17 && requested.minute > 0))) {
-      return DateTime(
+      final sameDay = DateTime(
           now.year, now.month, now.day, requested.hour, requested.minute, 0);
+      if (sameDay.isAfter(now)) return sameDay;
     }
     return DateTime(now.year, now.month, now.day, 17, 0, 0);
   }
 
-  // Equipment status to set when an item is returned in a given condition.
-  // Public and pure so the mapping is unit-testable (see test/).
+  // Equipment status for a given condition. Used both when an item is returned
+  // and when one is registered, so a "For Disposal" item is never borrowable
+  // whichever door it came through. Public and pure so the mapping is
+  // unit-testable (see test/).
   static String equipmentStatusForCondition(String condition) {
     switch (condition) {
       case 'Damaged':
@@ -820,8 +906,10 @@ class ApiService {
         // Approved loans. Surface it instead of silently returning one.
         return {
           'success': false,
-          'message': 'Multiple active loans found for this equipment. '
-              'Please resolve them from the Requests screen.',
+          // The Requests screen has no return action — only the Dashboard's
+          // Active Loans list does (QA 2026-09-19, M5).
+          'message': 'Multiple active loans found for this equipment. Please '
+              'return them one at a time from the Dashboard\'s Active Loans.',
         };
       }
       final activeDoc = active.first;
@@ -1263,6 +1351,66 @@ class ApiService {
       'damages': damages,
       'rating': rating,
     };
+  }
+
+  // Aggregates a reporting period's transactions into the numbers the staff
+  // Reports screen shows. Pure (takes an optional [now]) so the arithmetic is
+  // unit-testable (see test/).
+  //
+  // What counts as a borrowing is the whole point here, and it used to be wrong
+  // (QA 2026-09-19, M2):
+  //   • borrowings   — Approved or Returned only. A Pending request is not a
+  //     loan yet and a Rejected one never became one, so neither is counted and
+  //     neither can rank in Most Borrowed. (A rejected-only item used to place
+  //     second.) Same definition as studentReliability's `loans`.
+  //   • onTimeRate   — returns made on or before the due date, over the number
+  //     of RETURNS. The old formula was returns ÷ every request and never once
+  //     compared a return date with a due date, so it sank when a request was
+  //     filed and rose when one was rejected.
+  //   • overdue      — still out (Approved) and past due right now.
+  static Map<String, dynamic> reportMetrics(List<dynamic> txns,
+      {DateTime? now}) {
+    final ref = now ?? DateTime.now();
+    var borrowings = 0, returned = 0, onTime = 0, overdue = 0;
+    final Map<String, int> perItem = {};
+    for (final t in txns) {
+      final status = '${t['status'] ?? ''}';
+      if (status != 'Approved' && status != 'Returned') continue;
+      borrowings++;
+      final name = '${t['equipment_name'] ?? 'Unknown'}';
+      perItem[name] = (perItem[name] ?? 0) + 1;
+      final due = _asDate(t['due_date']);
+      if (status == 'Returned') {
+        returned++;
+        final ret = _asDate(t['return_date']);
+        // A return with no recorded date cannot be shown to be late, so it is
+        // not held against the student.
+        if (due == null || ret == null || !ret.isAfter(due)) onTime++;
+      } else if (due != null && due.isBefore(ref)) {
+        overdue++;
+      }
+    }
+    final sorted = perItem.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    return {
+      'borrowings':   borrowings,
+      'returned':     returned,
+      'onTime':       onTime,
+      'overdue':      overdue,
+      'onTimeRate':   returned > 0 ? onTime / returned * 100 : 0.0,
+      'mostBorrowed': Map<String, int>.fromEntries(sorted.take(4)),
+    };
+  }
+
+  // Loans a student still has out past their due date. Pure so the overdue
+  // borrowing gate can be unit-tested (see test/ and borrowEquipment).
+  static List<dynamic> overdueLoans(List<dynamic> txns, {DateTime? now}) {
+    final ref = now ?? DateTime.now();
+    return txns.where((t) {
+      if ('${t['status'] ?? ''}' != 'Approved') return false;
+      final due = _asDate(t['due_date']);
+      return due != null && due.isBefore(ref);
+    }).toList();
   }
 
   // ── Update Profile ────────────────────────────────────────────────────────
