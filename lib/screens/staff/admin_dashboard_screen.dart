@@ -167,6 +167,20 @@ class _AdminHomeState extends State<_AdminHome> {
     _load();
   }
 
+  // Every screen the Dashboard pushes can change a number the Dashboard shows:
+  // a QR return clears an active loan and can add a damage report and a hold;
+  // resolving a report frees an item and lifts a hold; Penalties and Students
+  // both change the hold count. None of them reloaded on the way back, so
+  // staff processed a return and the Dashboard went on listing the item as an
+  // active — often overdue — loan until the app was restarted. Same family as
+  // QA 2026-09-19 M4; found on the emulator 2026-09-21 while testing the QR
+  // return flow.
+  Future<void> _openThenReload(Widget page) async {
+    await Navigator.push(context, MaterialPageRoute(builder: (_) => page));
+    if (!mounted) return;
+    await _load();
+  }
+
   Future<void> _load() async {
     setState(() => _loading = true);
     try {
@@ -437,8 +451,8 @@ class _AdminHomeState extends State<_AdminHome> {
                         SizedBox(
                           width: double.infinity,
                           child: ElevatedButton.icon(
-                            onPressed: () => Navigator.push(context,
-                                MaterialPageRoute(builder: (_) => const QRScanScreen())),
+                            onPressed: () =>
+                                _openThenReload(const QRScanScreen()),
                             icon: const Icon(Icons.qr_code_scanner_rounded),
                             label: const Text('Scan QR to Process Return'),
                             style: ElevatedButton.styleFrom(
@@ -452,8 +466,8 @@ class _AdminHomeState extends State<_AdminHome> {
                       // ── Damage reports + penalties quick access (all staff) ──
                       Row(children: [
                         Expanded(child: OutlinedButton.icon(
-                          onPressed: () => Navigator.push(context,
-                              MaterialPageRoute(builder: (_) => const AdminDamageReportsScreen())),
+                          onPressed: () =>
+                              _openThenReload(const AdminDamageReportsScreen()),
                           icon: const Icon(Icons.report_problem_outlined, size: 18),
                           label: Text('Damage (${_stats['damage_reports'] ?? 0})'),
                           style: OutlinedButton.styleFrom(
@@ -464,8 +478,8 @@ class _AdminHomeState extends State<_AdminHome> {
                         )),
                         const SizedBox(width: 12),
                         Expanded(child: OutlinedButton.icon(
-                          onPressed: () => Navigator.push(context,
-                              MaterialPageRoute(builder: (_) => const AdminPenaltiesScreen())),
+                          onPressed: () =>
+                              _openThenReload(const AdminPenaltiesScreen()),
                           icon: const Icon(Icons.gpp_maybe_outlined, size: 18),
                           label: const Text('Penalties'),
                           style: OutlinedButton.styleFrom(
@@ -480,8 +494,8 @@ class _AdminHomeState extends State<_AdminHome> {
                       SizedBox(
                         width: double.infinity,
                         child: OutlinedButton.icon(
-                          onPressed: () => Navigator.push(context,
-                              MaterialPageRoute(builder: (_) => const AdminStudentsScreen())),
+                          onPressed: () =>
+                              _openThenReload(const AdminStudentsScreen()),
                           icon: const Icon(Icons.people_alt_outlined, size: 18),
                           label: const Text('Students'),
                           style: OutlinedButton.styleFrom(
