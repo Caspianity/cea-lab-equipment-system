@@ -554,10 +554,28 @@ class _EditEquipmentSheetState extends State<_EditEquipmentSheet> {
                 duration: const Duration(seconds: 6)));
       } else {
         setState(() => _saving = false);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text(res['message'] ?? 'Update failed.'),
-            backgroundColor: AppTheme.danger,
-            duration: const Duration(seconds: 6)));
+        // A snackbar shown from inside this bottom sheet renders BEHIND it, so
+        // a refused save looked like nothing happening at all. A dialog sits
+        // above the sheet. (Found while verifying the on-loan refusal below on
+        // the emulator, 2026-09-21.)
+        showDialog(
+          context: context,
+          builder: (_) => AlertDialog(
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            icon: const Icon(Icons.error_outline_rounded,
+                color: AppTheme.danger, size: 48),
+            title: const Text('Update Failed'),
+            content: Text(res['message'] ?? 'Update failed.',
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 13)),
+            actions: [
+              ElevatedButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('OK'))
+            ],
+          ),
+        );
       }
     } catch (_) {
       if (mounted) {
