@@ -1508,6 +1508,56 @@ class ApiService {
       return {'success': false, 'message': friendlyError(e)};
     }
   }
+
+  // The staff directory behind the superadmin's Staff Accounts screen. Any
+  // staff member may read this collection (firestore.rules), so the read is not
+  // gated here — the screen that opens it is.
+  static Future<List<Map<String, dynamic>>> getStaffList() async {
+    final snap = await _db.collection('staff').get();
+    final list = snap.docs.map((d) => {...d.data(), 'staff_id': d.id}).toList();
+    list.sort((a, b) =>
+        '${a['name']}'.toLowerCase().compareTo('${b['name']}'.toLowerCase()));
+    return list;
+  }
+
+  // A superadmin editing ANOTHER staff member: display name, access level, or
+  // both. The rules refuse it for everyone else, and refuse it on your own
+  // document — a superadmin cannot change its own role, which is what stops the
+  // last one demoting itself and leaving the system with no senior account.
+  static Future<Map<String, dynamic>> updateStaffMember({
+    required String staffId,
+    String? name,
+    String? role,
+  }) async {
+    if (staffId.isEmpty) {
+      return {'success': false, 'message': 'That staff account is missing an id.'};
+    }
+    if (staffId == Session.staffId) {
+      return {
+        'success': false,
+        'message': 'Change your own name in My Profile. Your own access level '
+            'can only be changed by another super admin.',
+      };
+    }
+    final patch = <String, dynamic>{};
+    if (name != null) patch['name'] = name;
+    if (role != null) patch['role'] = role;
+    if (patch.isEmpty) return {'success': false, 'message': 'Nothing to change.'};
+    try {
+      await _db.collection('staff').doc(staffId).update(patch);
+      return {'success': true, 'message': 'Staff account updated.'};
+    } on FirebaseException catch (e) {
+      if (e.code == 'permission-denied') {
+        return {
+          'success': false,
+          'message': 'Only a super admin can change another staff account.',
+        };
+      }
+      return {'success': false, 'message': friendlyError(e)};
+    } catch (e) {
+      return {'success': false, 'message': friendlyError(e)};
+    }
+  }
 }
 
 // Pulls the stored thumbnail out of an equipment (or transaction) record.

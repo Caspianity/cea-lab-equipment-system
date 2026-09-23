@@ -16,8 +16,8 @@
 // `version: <kAppVersion>+<kAppBuild>` in step. Dart cannot read pubspec at
 // runtime without adding the package_info_plus plugin, which is not worth a new
 // native dependency this close to the defense.
-const kAppVersion = '1.0.6';
-const kAppBuild = 7;
+const kAppVersion = '1.0.7';
+const kAppBuild = 8;
 
 // What the About screen prints, e.g. "Version 1.0.1 (build 2)".
 const kAppVersionLabel = 'Version $kAppVersion (build $kAppBuild)';
@@ -52,3 +52,32 @@ const kCategories = [
 
 // Equipment availability / condition statuses.
 const kStatuses = ['Available', 'Borrowed', 'Under Repair', 'For Disposal'];
+
+// ─── Staff access levels ──────────────────────────────────────────────────────
+// Mirrors the roles firestore.rules knows about. 'superadmin' was added on
+// 2026-09-23: an admin that may also manage the other staff accounts (rename
+// them, change their level) from the Staff Accounts screen. Creating and
+// deleting staff accounts is still out-of-band — console or
+// scripts/create-admins.js — for every level, superadmin included.
+const kStaffRoles = ['superadmin', 'admin', 'staff', 'viewer'];
+
+const kStaffRoleNames = {
+  'superadmin': 'Super Admin',
+  'admin':      'Admin',
+  'staff':      'Lab Staff',
+  'viewer':     'View Only',
+};
+
+// Friendly label for a stored role, e.g. 'superadmin' → 'Super Admin'.
+String staffRoleName(String role) => kStaffRoleNames[role] ?? role;
+
+// One line per level, shown under the picker so the choice is not a guess.
+// Admin and Lab Staff really are equivalent in this build — the difference is
+// documentary, not enforced — and saying so is better than implying a hierarchy
+// the code does not have.
+const kStaffRoleBlurbs = {
+  'superadmin': 'Everything an Admin can do, plus managing these staff accounts.',
+  'admin':      'Full day-to-day access: requests, returns, inventory, penalties.',
+  'staff':      'The same day-to-day access as an Admin.',
+  'viewer':     'Can see everything, but cannot change anything.',
+};

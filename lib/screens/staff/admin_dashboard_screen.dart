@@ -20,6 +20,7 @@ import 'admin_damage_reports_screen.dart';
 import 'admin_penalties_screen.dart';
 import 'admin_students_screen.dart';
 import 'staff_profile_screen.dart';
+import 'admin_staff_accounts_screen.dart';
 
 // ─── Admin Dashboard Screen ────────────────────────────────────────────────────
 
@@ -347,7 +348,7 @@ class _AdminHomeState extends State<_AdminHome> {
                                   child: Text(
                                       Session.isViewer
                                           ? 'VIEW ONLY'
-                                          : Session.staffRole.toUpperCase(),
+                                          : Session.staffRoleLabel,
                                       style: const TextStyle(
                                           color: AppTheme.accent,
                                           fontSize: 11,
@@ -515,6 +516,26 @@ class _AdminHomeState extends State<_AdminHome> {
                         )),
                       ]),
                       const SizedBox(height: 12),
+                      // ── Staff accounts (super admin only) ──
+                      // The rules refuse this to everyone else, so hiding it is
+                      // a courtesy, not the control.
+                      if (Session.isSuper) ...[
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton.icon(
+                            onPressed: () =>
+                                _openThenReload(const AdminStaffAccountsScreen()),
+                            icon: const Icon(Icons.manage_accounts_outlined, size: 18),
+                            label: const Text('Staff Accounts'),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: AppTheme.accent,
+                              side: const BorderSide(color: AppTheme.accent),
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                      ],
                       // ── Students directory (all staff; viewer is read-only) ──
                       SizedBox(
                         width: double.infinity,

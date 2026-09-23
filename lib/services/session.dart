@@ -36,12 +36,18 @@ class Session {
   }
 
   // ── Staff permission level ──────────────────────────────────────────────────
-  // A staff account's `role` field is one of: 'admin', 'staff', or 'viewer'.
-  // Viewers (e.g. the Supervising Minister) can see everything but cannot make
-  // changes (Prof recommendation #2 — view-only admin).
+  // A staff account's `role` field is one of: 'superadmin', 'admin', 'staff' or
+  // 'viewer'. Viewers (e.g. the Supervising Minister) can see everything but
+  // cannot make changes (Prof recommendation #2 — view-only admin). A superadmin
+  // is an admin that may also manage the other staff accounts (2026-09-23).
   static String get staffRole => (currentUser?['role'] ?? 'staff').toString();
   static bool get isViewer => role == 'staff' && staffRole == 'viewer';
-  static bool get isAdmin  => role == 'staff' && staffRole == 'admin';
+  static bool get isSuper  => role == 'staff' && staffRole == 'superadmin';
+  // An admin in the ordinary sense — the senior account counts as one too.
+  static bool get isAdmin  => role == 'staff' && (staffRole == 'admin' || isSuper);
+  // What the badge prints: 'SUPER ADMIN' reads better than 'SUPERADMIN'.
+  static String get staffRoleLabel =>
+      isSuper ? 'SUPER ADMIN' : staffRole.toUpperCase();
   // Whether the current user may perform write actions in the staff portal.
   static bool get canManage => role == 'staff' && staffRole != 'viewer';
   // The signed-in staff member's document id — stamped onto transactions they

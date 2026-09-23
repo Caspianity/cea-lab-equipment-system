@@ -62,8 +62,8 @@ if (!Number.isInteger(COUNT) || COUNT < 1 || COUNT > 50) {
   console.error('--count must be between 1 and 50.');
   process.exit(1);
 }
-if (!['admin', 'staff', 'viewer'].includes(ROLE)) {
-  console.error("--role must be one of: admin, staff, viewer (firestore.rules knows no others).");
+if (!['superadmin', 'admin', 'staff', 'viewer'].includes(ROLE)) {
+  console.error("--role must be one of: superadmin, admin, staff, viewer (firestore.rules knows no others).");
   process.exit(1);
 }
 

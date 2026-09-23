@@ -126,7 +126,7 @@ class _StaffProfileScreenState extends State<StaffProfileScreen> {
   Widget build(BuildContext context) {
     final viewer = Session.isViewer;
     final email  = '${Session.currentUser?['email'] ?? '—'}';
-    final role   = viewer ? 'VIEW ONLY' : Session.staffRole.toUpperCase();
+    final role   = viewer ? 'VIEW ONLY' : Session.staffRoleLabel;
 
     return Scaffold(
       appBar: AppBar(title: const Text('My Profile')),
