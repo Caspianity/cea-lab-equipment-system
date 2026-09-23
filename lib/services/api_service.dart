@@ -1475,6 +1475,39 @@ class ApiService {
       return {'success': false, 'message': friendlyError(e)};
     }
   }
+
+  // The staff side's one self-service write. `staff/{uid}` is otherwise closed
+  // to the client (firestore.rules), so this changes the display name and
+  // nothing else: role and email stay with whoever provisioned the account.
+  //
+  // `staffId` is the staff DOCUMENT id, which is normally the caller's Auth
+  // UID. Login has a legacy fallback that finds the doc by its `email` field
+  // when the id is something else (api_service.dart, login → staff branch);
+  // for such an account the rules refuse the write, because the uid does not
+  // match the document. Say so plainly rather than "permission denied".
+  static Future<Map<String, dynamic>> updateStaffName({
+    required String staffId,
+    required String name,
+  }) async {
+    if (staffId.isEmpty) {
+      return {'success': false, 'message': 'Your session has expired. Please sign in again.'};
+    }
+    try {
+      await _db.collection('staff').doc(staffId).update({'name': name});
+      return {'success': true, 'message': 'Profile updated successfully.'};
+    } on FirebaseException catch (e) {
+      if (e.code == 'permission-denied') {
+        return {
+          'success': false,
+          'message': 'This staff account cannot be renamed from the app. '
+              'Ask an administrator to change it.',
+        };
+      }
+      return {'success': false, 'message': friendlyError(e)};
+    } catch (e) {
+      return {'success': false, 'message': friendlyError(e)};
+    }
+  }
 }
 
 // Pulls the stored thumbnail out of an equipment (or transaction) record.

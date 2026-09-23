@@ -19,6 +19,7 @@ import 'admin_reports_screen.dart';
 import 'admin_damage_reports_screen.dart';
 import 'admin_penalties_screen.dart';
 import 'admin_students_screen.dart';
+import 'staff_profile_screen.dart';
 
 // ─── Admin Dashboard Screen ────────────────────────────────────────────────────
 
@@ -43,12 +44,23 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     });
   }
 
-  final List<Widget> _pages = [
-    const _AdminHome(),
-    const AdminRequestsScreen(),
-    const AdminInventoryScreen(),
-    const AdminReportsScreen(),
-  ];
+  // Built fresh on every build, and _AdminHome deliberately NOT const.
+  //
+  // The home page greets the signed-in staff member by name. A const widget is
+  // canonicalised, so returning the same instance makes Flutter treat the
+  // subtree as unchanged and skip it: after the Staff Profile screen renamed
+  // the account, setState here reached the app bar but the header underneath
+  // still read the old name (found while verifying the rename on the emulator,
+  // 2026-09-23 — the same shape as the stale dashboard fixed in 41c1c50).
+  // A new instance of the same type rebuilds the subtree while keeping its
+  // State, so the stats already loaded are not re-fetched.
+  List<Widget> get _pages => [
+        // ignore: prefer_const_constructors
+        _AdminHome(),
+        const AdminRequestsScreen(),
+        const AdminInventoryScreen(),
+        const AdminReportsScreen(),
+      ];
 
   void _confirmSignOut(BuildContext context) {
     showDialog(
@@ -98,6 +110,19 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           ],
         ),
         actions: [
+          IconButton(
+            tooltip: 'My Profile',
+            icon: const Icon(Icons.account_circle_outlined, color: Colors.white),
+            onPressed: () async {
+              await Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                      builder: (_) => const StaffProfileScreen()));
+              // The dashboard header greets the signed-in staff member by name,
+              // so redraw it in case the name was just changed.
+              if (mounted) setState(() {});
+            },
+          ),
           IconButton(
             tooltip: 'Sign Out',
             icon: const Icon(Icons.logout_rounded, color: Colors.white),

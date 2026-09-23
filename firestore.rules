@@ -75,10 +75,30 @@ service cloud.firestore {
     }
 
     // Staff/admin/viewer accounts are provisioned out-of-band (Firebase console
-    // or an admin tool); the app never writes them.
+    // or scripts/create-admins.js); the app can never create or delete one, and
+    // nobody may edit anyone else's — not even an admin.
+    //
+    // The single exception is the Staff Profile screen (2026-09-23): a signed-in
+    // staff member may correct the display name on their OWN document. `role` is
+    // what every authorisation check in this file reads, and `email` is the key
+    // the login fallback query uses (api_service.dart, login → staff branch), so
+    // both stay console-only. A self-service rename must never be able to become
+    // a self-service promotion.
     match /staff/{uid} {
-      allow read:  if request.auth.uid == uid || isStaff();
-      allow write: if false;
+      allow read:   if request.auth.uid == uid || isStaff();
+      allow create: if false;
+      allow delete: if false;
+      // Viewers are excluded: "a view-only account writes nothing" is a claim
+      // the paper makes (Table 8) and the suite checks (S30-S32), and it stays
+      // literally true this way. Reading `resource.data.role` costs no extra
+      // document access — it is the document already being updated.
+      allow update: if request.auth.uid == uid
+        && resource.data.role != 'viewer'
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['name'])
+        && request.resource.data.name is string
+        && request.resource.data.name.trim().size() >= 2
+        && request.resource.data.name.size() <= 60;
     }
 
     // Equipment is readable by any signed-in user; only managers may change it.
