@@ -97,15 +97,15 @@ class ApiService {
 
   // The e-mail verification gate, shared by login() and the splash screen's
   // session restore so the two can never disagree. True when the signed-in
-  // user may proceed: demo mode, an admin/viewer staff account (provisioned by
-  // an administrator), an account predating kLegacyAccountCutoff, or a
-  // verified e-mail address.
+  // user may proceed: demo mode, a superadmin/admin/viewer staff account
+  // (provisioned by an administrator — kProvisionedStaffRoles), an account
+  // predating kLegacyAccountCutoff, or a verified e-mail address.
   static bool passesVerificationGate(Map<String, dynamic>? profile,
       {bool isStaff = false}) {
     if (kDemoMode) return true;
     if (isStaff) {
       final sRole = (profile?['role'] ?? 'staff').toString();
-      if (sRole == 'admin' || sRole == 'viewer') return true;
+      if (kProvisionedStaffRoles.contains(sRole)) return true;
     }
     if (_isLegacyAccount(profile)) return true;
     return _auth.currentUser?.emailVerified == true;
@@ -1519,6 +1519,19 @@ class ApiService {
         '${a['name']}'.toLowerCase().compareTo('${b['name']}'.toLowerCase()));
     return list;
   }
+
+  // The signed-in staff member's own document, live, for the staff portal to
+  // follow access-level changes (QA 2026-09-23, F2). The rules let an account
+  // read its own staff document whatever its level, so this stays readable
+  // for as long as the session lasts. Null means the server confirmed the
+  // document is gone; a "missing" served from the offline cache proves
+  // nothing, so it is skipped rather than reported.
+  static Stream<Map<String, dynamic>?> staffSelfStream(String staffId) => _db
+      .collection('staff')
+      .doc(staffId)
+      .snapshots()
+      .where((s) => s.exists || !s.metadata.isFromCache)
+      .map((s) => s.exists ? s.data() : null);
 
   // A superadmin editing ANOTHER staff member: display name, access level, or
   // both. The rules refuse it for everyone else, and refuse it on your own

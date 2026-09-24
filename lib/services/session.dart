@@ -47,11 +47,15 @@ class Session {
   // 'viewer'. Viewers (e.g. the Supervising Minister) can see everything but
   // cannot make changes (Prof recommendation #2 — view-only admin). A superadmin
   // is an admin that may also manage the other staff accounts (2026-09-23).
+  //
+  // There is deliberately no isAdmin. 'admin' and 'staff' have the same
+  // permissions — the paper's "full-access administrators or staff" — so
+  // nothing may branch on the difference; an unused isAdmin only suggested a
+  // hierarchy the system does not have (QA 2026-09-23, F4). The one place the
+  // two differ is the e-mail gate at sign-in (kProvisionedStaffRoles).
   static String get staffRole => (currentUser?['role'] ?? 'staff').toString();
   static bool get isViewer => role == 'staff' && staffRole == 'viewer';
   static bool get isSuper  => role == 'staff' && staffRole == 'superadmin';
-  // An admin in the ordinary sense — the senior account counts as one too.
-  static bool get isAdmin  => role == 'staff' && (staffRole == 'admin' || isSuper);
   // What the badge prints: 'SUPER ADMIN' reads better than 'SUPERADMIN'.
   static String get staffRoleLabel =>
       isSuper ? 'SUPER ADMIN' : staffRole.toUpperCase();
@@ -60,6 +64,27 @@ class Session {
   // The signed-in staff member's document id — stamped onto transactions they
   // approve/reject/return so there's an audit trail of who did what.
   static String get staffId => (currentUser?['staff_id'] ?? '').toString();
+
+  // Folds a fresh copy of the signed-in staff member's own document into the
+  // session. The staff portal listens to that document (QA 2026-09-23, F2), so
+  // a level changed by a super admin reaches this device at once instead of at
+  // the next sign-in. Login and the splash restore both build the session as
+  // that document plus `staff_id`, so a fresh copy replaces it, not merges.
+  // `narrowed` means something this account could do a moment ago is gone.
+  static ({bool nameChanged, bool roleChanged, bool narrowed}) refreshStaff(
+      Map<String, dynamic> doc) {
+    if (role != 'staff') {
+      return (nameChanged: false, roleChanged: false, narrowed: false);
+    }
+    final id = staffId, oldName = name, oldRole = staffRole;
+    final couldManage = canManage, wasSuper = isSuper;
+    currentUser = {...doc, 'staff_id': id};
+    return (
+      nameChanged: name != oldName,
+      roleChanged: staffRole != oldRole,
+      narrowed: (couldManage && !canManage) || (wasSuper && !isSuper),
+    );
+  }
 
   // ── Borrowing hold / penalty (students) ────────────────────────────────────
   static bool get isOnHold => currentUser?['hold'] == true;

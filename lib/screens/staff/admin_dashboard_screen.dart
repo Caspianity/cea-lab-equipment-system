@@ -5,8 +5,11 @@
 // -----------------------------------------------------------------------------
 
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
+import '../../constants.dart';
 import '../../services/api_service.dart';
 import '../../services/session.dart';
 import '../../theme.dart';
@@ -32,6 +35,7 @@ class AdminDashboardScreen extends StatefulWidget {
 
 class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   int _currentIndex = 0;
+  StreamSubscription<Map<String, dynamic>?>? _account;
 
   @override
   void initState() {
@@ -43,6 +47,65 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             MaterialPageRoute(builder: (_) => const LoginScreen()));
       }
     });
+    if (Session.role == 'staff' && Session.staffId.isNotEmpty) {
+      // Errors are ignored: the only expected one is a legacy account whose
+      // document id is not its uid, which the rules refuse — and such an
+      // account can change nothing anyway.
+      _account = ApiService.staffSelfStream(Session.staffId)
+          .listen(_onAccount, onError: (_) {});
+    }
+  }
+
+  @override
+  void dispose() {
+    _account?.cancel();
+    super.dispose();
+  }
+
+  // QA 2026-09-23, F2. The portal used to read the account once, at sign-in,
+  // so when a super admin changed this account's access level the device
+  // kept the old badge and buttons until the person signed out, and every
+  // write was refused with a bare "You do not have permission to do that."
+  // It now follows its own staff document and redraws when the level changes.
+  void _onAccount(Map<String, dynamic>? doc) {
+    if (!mounted || Session.role != 'staff') return;
+    if (doc == null) {
+      _accountRemoved();
+      return;
+    }
+    final change = Session.refreshStaff(doc);
+    if (!change.nameChanged && !change.roleChanged) return;
+    if (change.narrowed) {
+      // A screen or sheet open on top may still offer an action this account
+      // no longer has, so close everything back to the portal.
+      final portal = ModalRoute.of(context);
+      if (portal != null) Navigator.of(context).popUntil((r) => r == portal);
+    }
+    setState(() {});
+    if (change.roleChanged) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Your access level was changed to '
+            '${staffRoleName(Session.staffRole)}.'),
+        behavior: SnackBarBehavior.floating,
+      ));
+    }
+  }
+
+  // The account's staff document was deleted (console only — no client can).
+  // Nothing this device offers would be accepted any more, so end the session.
+  Future<void> _accountRemoved() async {
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+    await _account?.cancel();
+    _account = null;
+    await ApiService.signOut();
+    navigator.pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const LoginScreen()), (_) => false);
+    messenger.showSnackBar(const SnackBar(
+      content: Text('This staff account has been removed. '
+          'Please contact an administrator.'),
+      behavior: SnackBarBehavior.floating,
+    ));
   }
 
   // Built fresh on every build, and _AdminHome deliberately NOT const.
@@ -83,6 +146,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               // not used across an async gap.
               final navigator = Navigator.of(context);
               navigator.pop();
+              // Stop following the account first: once signed out, the
+              // listener would be refused and log a PERMISSION_DENIED.
+              await _account?.cancel();
+              _account = null;
               await ApiService.signOut();
               navigator.pushReplacement(
                   MaterialPageRoute(builder: (_) => const LoginScreen()));
@@ -133,7 +200,16 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       ),
       body: Column(
         children: [
-          Expanded(child: _pages[_currentIndex]),
+          // Keyed on the access level so a change picked up by _onAccount
+          // rebuilds the open tab from scratch. Three of the four pages are
+          // const, and setState skips a const page, so their Approve and Edit
+          // buttons would otherwise outlive the level that allowed them.
+          Expanded(
+            child: KeyedSubtree(
+              key: ValueKey(Session.canManage),
+              child: _pages[_currentIndex],
+            ),
+          ),
         ],
       ),
       bottomNavigationBar: Container(

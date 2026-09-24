@@ -1,6 +1,7 @@
 // Unit tests for the pure business logic in ApiService — no Firebase or
 // network needed, so these run in plain `flutter test`.
 
+import 'package:cloud_firestore/cloud_firestore.dart' show Timestamp;
 import 'package:flutter_test/flutter_test.dart';
 
 // These now import only the service layer and shared constants — the pure
@@ -372,31 +373,27 @@ void main() {
 
     void as(String r) => Session.set({'role': r}, 'staff');
 
-    test('superadmin is an admin that can manage, labelled SUPER ADMIN', () {
+    test('superadmin can manage, labelled SUPER ADMIN', () {
       as('superadmin');
       expect(Session.isSuper, isTrue);
-      expect(Session.isAdmin, isTrue);
       expect(Session.canManage, isTrue);
       expect(Session.isViewer, isFalse);
       expect(Session.staffRoleLabel, 'SUPER ADMIN');
     });
-    test('admin and staff can manage but are not super', () {
+    // F4: the two labels carry identical permissions, by design.
+    test('admin and staff get exactly the same answers', () {
       for (final r in ['admin', 'staff']) {
         as(r);
         expect(Session.isSuper, isFalse, reason: r);
         expect(Session.canManage, isTrue, reason: r);
+        expect(Session.isViewer, isFalse, reason: r);
         expect(Session.staffRoleLabel, r.toUpperCase());
       }
-      as('admin');
-      expect(Session.isAdmin, isTrue);
-      as('staff');
-      expect(Session.isAdmin, isFalse);
     });
     test('viewer can manage nothing', () {
       as('viewer');
       expect(Session.isViewer, isTrue);
       expect(Session.canManage, isFalse);
-      expect(Session.isAdmin, isFalse);
       expect(Session.isSuper, isFalse);
     });
     test('a missing role defaults to staff', () {
@@ -408,6 +405,84 @@ void main() {
       Session.set({'role': 'superadmin'}, 'student');
       expect(Session.isSuper, isFalse);
       expect(Session.canManage, isFalse);
+    });
+  });
+
+  // QA 2026-09-23, F2: the portal folds live copies of its own staff document
+  // into the session; these pin down what it is told about each change.
+  group('Session.refreshStaff', () {
+    tearDown(Session.clear);
+
+    void signIn(String role) => Session.set(
+        {'name': 'Lab Admin 2', 'email': 'admin2@neu.edu.ph', 'role': role,
+         'staff_id': 'uid2'}, 'staff');
+    Map<String, dynamic> doc(String role, {String name = 'Lab Admin 2'}) =>
+        {'name': name, 'email': 'admin2@neu.edu.ph', 'role': role};
+
+    test('the same document again reports nothing', () {
+      signIn('admin');
+      final c = Session.refreshStaff(doc('admin'));
+      expect([c.nameChanged, c.roleChanged, c.narrowed], [false, false, false]);
+    });
+    test('demoted to View Only: narrowed, and the session is a viewer now', () {
+      signIn('admin');
+      final c = Session.refreshStaff(doc('viewer'));
+      expect(c.roleChanged, isTrue);
+      expect(c.narrowed, isTrue);
+      expect(Session.canManage, isFalse);
+      expect(Session.staffRoleLabel, 'VIEWER');
+    });
+    test('super admin to admin is narrowed: Staff Accounts is gone', () {
+      signIn('superadmin');
+      final c = Session.refreshStaff(doc('admin'));
+      expect(c.narrowed, isTrue);
+      expect(Session.isSuper, isFalse);
+      expect(Session.canManage, isTrue);
+    });
+    test('promotion and admin/staff relabels are not narrowed', () {
+      for (final (from, to) in [('viewer', 'admin'), ('admin', 'superadmin'),
+                                ('admin', 'staff'), ('staff', 'admin')]) {
+        signIn(from);
+        final c = Session.refreshStaff(doc(to));
+        expect(c.roleChanged, isTrue, reason: '$from → $to');
+        expect(c.narrowed, isFalse, reason: '$from → $to');
+      }
+    });
+    test('a rename is reported, and staff_id survives the refresh', () {
+      signIn('admin');
+      final c = Session.refreshStaff(doc('admin', name: 'Engr. R. Bello'));
+      expect(c.nameChanged, isTrue);
+      expect(c.roleChanged, isFalse);
+      expect(Session.name, 'Engr. R. Bello');
+      expect(Session.staffId, 'uid2');
+    });
+    test('a student session is left alone', () {
+      Session.set({'name': 'ce demo', 'student_id': 's1'}, 'student');
+      final c = Session.refreshStaff(doc('superadmin'));
+      expect(c.roleChanged, isFalse);
+      expect(Session.name, 'ce demo');
+    });
+  });
+
+  // QA 2026-09-23, F4. The e-mail gate is the one place Admin and Lab Staff
+  // differ, and it used to treat a Super Admin as Lab Staff. These accounts
+  // are all created after the cutoff, so only the role can let them through
+  // — and it does, without asking Firebase Auth anything.
+  group('E-mail gate for staff levels', () {
+    final recent = {'created_at': Timestamp.fromDate(DateTime.utc(2026, 9, 23))};
+
+    test('provisioned levels skip it, superadmin included', () {
+      for (final r in ['superadmin', 'admin', 'viewer']) {
+        expect(ApiService.passesVerificationGate({...recent, 'role': r}, isStaff: true),
+            isTrue, reason: r);
+      }
+    });
+    test('Lab Staff is the one level that must verify', () {
+      expect(kProvisionedStaffRoles, isNot(contains('staff')));
+      expect(kProvisionedStaffRoles.union({'staff'}), kStaffRoles.toSet());
+    });
+    test('a Lab Staff account from before the cutoff still gets in', () {
+      expect(ApiService.passesVerificationGate({'role': 'staff'}, isStaff: true), isTrue);
     });
   });
 }

@@ -71,13 +71,23 @@ const kStaffRoleNames = {
 // Friendly label for a stored role, e.g. 'superadmin' → 'Super Admin'.
 String staffRoleName(String role) => kStaffRoleNames[role] ?? role;
 
+// Levels treated as set up by an administrator, so they skip the e-mail
+// verification gate at sign-in (ApiService.passesVerificationGate). A Lab
+// Staff account needs a verified address instead, unless it predates
+// kLegacyAccountCutoff — the ONE enforced difference between Admin and Lab
+// Staff. 'superadmin' was missing until 2026-09-24, so an unverified Admin
+// promoted to Super Admin would have been locked out at its next sign-in
+// (found while settling QA 2026-09-23, F4).
+const kProvisionedStaffRoles = {'superadmin', 'admin', 'viewer'};
+
 // One line per level, shown under the picker so the choice is not a guess.
-// Admin and Lab Staff really are equivalent in this build — the difference is
-// documentary, not enforced — and saying so is better than implying a hierarchy
-// the code does not have.
+// Admin and Lab Staff have the same permissions — the paper's "full-access
+// administrators or staff" — and saying so is better than implying a
+// hierarchy the code does not have (QA 2026-09-23, F4).
 const kStaffRoleBlurbs = {
   'superadmin': 'Everything an Admin can do, plus managing these staff accounts.',
   'admin':      'Full day-to-day access: requests, returns, inventory, penalties.',
-  'staff':      'The same day-to-day access as an Admin.',
+  'staff':      'The same day-to-day access as an Admin. The one difference: '
+      'this account needs a verified email address to sign in.',
   'viewer':     'Can see everything, but cannot change anything.',
 };

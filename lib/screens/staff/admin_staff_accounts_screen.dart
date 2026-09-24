@@ -41,6 +41,11 @@ class _AdminStaffAccountsScreenState extends State<AdminStaffAccountsScreen> {
     _load();
   }
 
+  // Only the first load swaps the list for a spinner. A reload after a save,
+  // or a pull-to-refresh, keeps the list on screen so it keeps its scroll
+  // position — swapping it out sent the super admin back to the top after
+  // every edit (QA 2026-09-23, F3). A failed reload keeps the list too and
+  // says so in a snackbar.
   Future<void> _load() async {
     setState(() { _loading = true; _error = null; });
     try {
@@ -49,7 +54,12 @@ class _AdminStaffAccountsScreenState extends State<AdminStaffAccountsScreen> {
       setState(() { _staff = list; _loading = false; });
     } catch (e) {
       if (!mounted) return;
-      setState(() { _error = ApiService.friendlyError(e); _loading = false; });
+      final msg = ApiService.friendlyError(e);
+      setState(() {
+        _loading = false;
+        if (_staff.isEmpty) _error = msg;
+      });
+      if (_staff.isNotEmpty) _snack(msg, AppTheme.danger);
     }
   }
 
@@ -177,10 +187,7 @@ class _AdminStaffAccountsScreenState extends State<AdminStaffAccountsScreen> {
     final isMe   = id == Session.staffId;
     final role   = '${m['role'] ?? 'staff'}';
     final name   = '${m['name'] ?? '(no name)'}';
-    final parts  = name.trim().split(' ');
-    final inits  = (parts.length >= 2 && parts[0].isNotEmpty && parts[1].isNotEmpty)
-        ? '${parts[0][0]}${parts[1][0]}'.toUpperCase()
-        : (name.isNotEmpty ? name[0].toUpperCase() : '?');
+    final inits  = Session.initialsOf(name);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
@@ -237,7 +244,7 @@ class _AdminStaffAccountsScreenState extends State<AdminStaffAccountsScreen> {
           ),
         ],
       ),
-      body: _loading
+      body: _loading && _staff.isEmpty
           ? const Center(child: CircularProgressIndicator())
           : _error != null
               ? Center(
