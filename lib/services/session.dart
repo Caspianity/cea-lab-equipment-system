@@ -29,10 +29,17 @@ class Session {
   // for every student (QA 2026-09-19, H2).
   static String get studentId => '${currentUser?['student_id'] ?? ''}';
   static String get course => currentUser?['course'] ?? '';
-  static String get initials {
-    final parts = name.trim().split(' ');
-    if (parts.length >= 2) return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
-    return name.isNotEmpty ? name[0].toUpperCase() : 'U';
+  static String get initials => initialsOf(name, fallback: 'U');
+
+  // Up to two initials from a display name. Splits on any run of whitespace:
+  // splitting on a single ' ' turned "ce  demo" into ['ce', '', 'demo'] and
+  // ''[0] threw, which red-screened every avatar for that user — and the name
+  // lives in Firestore, so it survived a restart (QA 2026-09-23, F1).
+  static String initialsOf(String name, {String fallback = '?'}) {
+    final parts = name.trim().split(RegExp(r'\s+')).where((p) => p.isNotEmpty).toList();
+    if (parts.isEmpty) return fallback;
+    if (parts.length == 1) return parts[0][0].toUpperCase();
+    return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
   }
 
   // ── Staff permission level ──────────────────────────────────────────────────

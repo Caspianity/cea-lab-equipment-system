@@ -341,4 +341,73 @@ void main() {
       expect(Session.studentId, '');
     });
   });
+
+  // Regression (QA 2026-09-23, F1): a double space in a name split into an
+  // empty piece, ''[0] threw, and every avatar for that user red-screened.
+  group('Session.initials', () {
+    tearDown(Session.clear);
+
+    test('survives repeated, leading and trailing whitespace', () {
+      expect(Session.initialsOf('ce  demo'), 'CD');
+      expect(Session.initialsOf('  juan \t dela cruz '), 'JD');
+    });
+    test('one word gives one initial', () {
+      expect(Session.initialsOf('admin'), 'A');
+    });
+    test('blank names fall back instead of throwing', () {
+      expect(Session.initialsOf(''), '?');
+      expect(Session.initialsOf('   '), '?');
+      Session.set({'name': '   '}, 'student');
+      expect(Session.initials, 'U');
+    });
+    test('the signed-in getter uses the same rule', () {
+      Session.set({'name': 'Lab  Admin 1'}, 'staff');
+      expect(Session.initials, 'LA');
+    });
+  });
+
+  // QA 2026-09-23, F5: the four staff roles and what each getter reports.
+  group('Session staff roles', () {
+    tearDown(Session.clear);
+
+    void as(String r) => Session.set({'role': r}, 'staff');
+
+    test('superadmin is an admin that can manage, labelled SUPER ADMIN', () {
+      as('superadmin');
+      expect(Session.isSuper, isTrue);
+      expect(Session.isAdmin, isTrue);
+      expect(Session.canManage, isTrue);
+      expect(Session.isViewer, isFalse);
+      expect(Session.staffRoleLabel, 'SUPER ADMIN');
+    });
+    test('admin and staff can manage but are not super', () {
+      for (final r in ['admin', 'staff']) {
+        as(r);
+        expect(Session.isSuper, isFalse, reason: r);
+        expect(Session.canManage, isTrue, reason: r);
+        expect(Session.staffRoleLabel, r.toUpperCase());
+      }
+      as('admin');
+      expect(Session.isAdmin, isTrue);
+      as('staff');
+      expect(Session.isAdmin, isFalse);
+    });
+    test('viewer can manage nothing', () {
+      as('viewer');
+      expect(Session.isViewer, isTrue);
+      expect(Session.canManage, isFalse);
+      expect(Session.isAdmin, isFalse);
+      expect(Session.isSuper, isFalse);
+    });
+    test('a missing role defaults to staff', () {
+      Session.set({}, 'staff');
+      expect(Session.staffRole, 'staff');
+      expect(Session.canManage, isTrue);
+    });
+    test('a student is never staff, whatever its map says', () {
+      Session.set({'role': 'superadmin'}, 'student');
+      expect(Session.isSuper, isFalse);
+      expect(Session.canManage, isFalse);
+    });
+  });
 }
