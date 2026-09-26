@@ -10,6 +10,7 @@
 // stay library-private alongside it.
 // -----------------------------------------------------------------------------
 
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -412,6 +413,11 @@ class ApiService {
   // into the account that just signed out — including a staff ADMIN account on
   // a shared lab phone. Always go through here.
   static Future<void> signOut() async {
+    // Close every live stream first. A screen still on the widget tree (the
+    // Requests tab, My Borrowings) would otherwise keep its listener open past
+    // the sign-out, the rules would refuse it, and Firestore logged a
+    // PERMISSION_DENIED warning (QA 2026-09-19 section 9; 2026-09-23, F6).
+    await _closeLiveStreams();
     try {
       await _auth.signOut();
     } catch (_) {
@@ -1096,20 +1102,53 @@ class ApiService {
   // Firestore pushes changes as they happen, so screens built on these update
   // by themselves — a student sees an approval the moment staff taps it, with
   // no pull-to-refresh.
+  //
+  // Every live stream goes through _untilSignOut, so signOut() can end them all
+  // before the account goes away. A closed stream simply stops: the screen
+  // keeps its last data until the login page replaces it.
+  static final Set<Future<void> Function()> _liveStreams = {};
+
+  static Stream<T> _untilSignOut<T>(Stream<T> source) {
+    late final StreamController<T> out;
+    StreamSubscription<T>? sub;
+    Future<void> close() async {
+      _liveStreams.remove(close);
+      final s = sub;
+      sub = null;
+      await s?.cancel();
+      if (!out.isClosed) await out.close();
+    }
+
+    out = StreamController<T>(
+      onListen: () {
+        _liveStreams.add(close);
+        sub = source.listen(out.add, onError: out.addError, onDone: close);
+      },
+      onCancel: close,
+    );
+    return out.stream;
+  }
+
+  static Future<void> _closeLiveStreams() async {
+    final live = _liveStreams.toList();
+    _liveStreams.clear();
+    await Future.wait(live.map((close) => close()));
+  }
+
   static Stream<List<dynamic>> myBorrowingsStream() {
     final sid = Session.currentUser?['student_id']?.toString() ?? '';
     if (sid.isEmpty) return Stream.value(const []);
-    return _db
+    return _untilSignOut(_db
         .collection('borrow_transactions')
         .where('student_id', isEqualTo: sid)
         .snapshots()
-        .map((snap) => _mapTransactionDocs(snap.docs));
+        .map((snap) => _mapTransactionDocs(snap.docs)));
   }
 
-  static Stream<List<dynamic>> requestsStream() => _db
+  static Stream<List<dynamic>> requestsStream() => _untilSignOut(_db
       .collection('borrow_transactions')
       .snapshots()
-      .map((snap) => _mapTransactionDocs(snap.docs));
+      .map((snap) => _mapTransactionDocs(snap.docs)));
 
   // Approve or reject a borrow request. Runs in a transaction so that, on
   // approval, the equipment is only locked to Borrowed if it is still Available
@@ -1526,12 +1565,13 @@ class ApiService {
   // for as long as the session lasts. Null means the server confirmed the
   // document is gone; a "missing" served from the offline cache proves
   // nothing, so it is skipped rather than reported.
-  static Stream<Map<String, dynamic>?> staffSelfStream(String staffId) => _db
-      .collection('staff')
-      .doc(staffId)
-      .snapshots()
-      .where((s) => s.exists || !s.metadata.isFromCache)
-      .map((s) => s.exists ? s.data() : null);
+  static Stream<Map<String, dynamic>?> staffSelfStream(String staffId) =>
+      _untilSignOut(_db
+          .collection('staff')
+          .doc(staffId)
+          .snapshots()
+          .where((s) => s.exists || !s.metadata.isFromCache)
+          .map((s) => s.exists ? s.data() : null));
 
   // A superadmin editing ANOTHER staff member: display name, access level, or
   // both. The rules refuse it for everyone else, and refuse it on your own
