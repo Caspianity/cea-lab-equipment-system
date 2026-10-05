@@ -16,8 +16,8 @@
 // `version: <kAppVersion>+<kAppBuild>` in step. Dart cannot read pubspec at
 // runtime without adding the package_info_plus plugin, which is not worth a new
 // native dependency this close to the defense.
-const kAppVersion = '1.0.12';
-const kAppBuild = 13;
+const kAppVersion = '1.0.13';
+const kAppBuild = 14;
 
 // What the About screen prints, e.g. "Version 1.0.1 (build 2)".
 const kAppVersionLabel = 'Version $kAppVersion (build $kAppBuild)';
@@ -98,3 +98,13 @@ const kStaffRoleBlurbs = {
       'this account needs a verified email address to sign in.',
   'viewer':     'Can see everything, but cannot change anything.',
 };
+
+// ─── Dates ────────────────────────────────────────────────────────────────────
+const _kMonthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+// A calendar date for people to read, e.g. "May 6, 1992". Used for the
+// equipment dates (acquired / added); the lab's own inventory sheet writes
+// "6/May/92", and an all-number form would be ambiguous between 5/6 and 6/5.
+String formatDate(DateTime d) =>
+    '${_kMonthNames[d.month - 1]} ${d.day}, ${d.year}';

@@ -408,6 +408,22 @@ void main() {
     });
   });
 
+  // Equipment dates (date acquired / date added), prof's comment 2026-10-05.
+  group('formatDate', () {
+    test('writes month name, day, year', () {
+      expect(formatDate(DateTime(1992, 5, 6)), 'May 6, 1992');
+      expect(formatDate(DateTime(2026, 10, 2, 14, 30)), 'Oct 2, 2026');
+    });
+    test('covers the first and last months', () {
+      expect(formatDate(DateTime(1991, 1, 18)), 'Jan 18, 1991');
+      expect(formatDate(DateTime(2025, 12, 31)), 'Dec 31, 2025');
+    });
+    test('reads a stored Timestamp the same way, via asDate', () {
+      final ts = Timestamp.fromDate(DateTime(1991, 7, 18));
+      expect(formatDate(ApiService.asDate(ts)!), 'Jul 18, 1991');
+    });
+  });
+
   // Regression: studentId used to int.parse the Firebase UID, which is always
   // alphanumeric, so it was always 0 and Edit Profile wrote to students/0.
   group('Session.studentId', () {

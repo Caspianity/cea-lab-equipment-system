@@ -33,7 +33,10 @@ class _EquipmentRegistrationScreenState
   final _brandCtrl = TextEditingController();
   final _modelCtrl = TextEditingController();
   final _serialCtrl = TextEditingController();
+  final _iinCtrl = TextEditingController();
   final _locationCtrl = TextEditingController();
+  // Optional: the lab's records often have no acquisition date.
+  DateTime? _dateAcquired;
   // Pre-filled: the centred hintText '1' was indistinguishable from a real
   // value, so the form looked complete but failed validation with "Required".
   final _qtyCtrl = TextEditingController(text: '1');
@@ -142,6 +145,8 @@ class _EquipmentRegistrationScreenState
         'brand':          _brandCtrl.text.trim(),
         'model':          _modelCtrl.text.trim(),
         'serial_number':  _serialCtrl.text.trim(),
+        'iin':            _iinCtrl.text.trim(),
+        'date_acquired':  _dateAcquired,
         // The Condition field is required on this form but used to be dropped
         // on the way out, so every item was stored Available — a scope
         // registered as For Disposal was immediately borrowable (QA
@@ -212,7 +217,7 @@ class _EquipmentRegistrationScreenState
   @override
   void dispose() {
     _nameCtrl.dispose(); _descCtrl.dispose(); _brandCtrl.dispose();
-    _modelCtrl.dispose(); _serialCtrl.dispose();
+    _modelCtrl.dispose(); _serialCtrl.dispose(); _iinCtrl.dispose();
     _locationCtrl.dispose(); _qtyCtrl.dispose();
     _scrollCtrl.dispose();
     super.dispose();
@@ -465,6 +470,25 @@ class _EquipmentRegistrationScreenState
                     prefixIcon: Icon(Icons.tag_rounded, color: AppTheme.textMid),
                     errorMaxLines: 3,
                   ),
+                ),
+                const SizedBox(height: 16),
+
+                FieldLabel('IIN (Item Identification No.)'),
+                const SizedBox(height: 8),
+                TextFormField(
+                  controller: _iinCtrl,
+                  decoration: const InputDecoration(
+                    hintText: "From the custodian's inventory list",
+                    prefixIcon: Icon(Icons.inventory_2_outlined, color: AppTheme.textMid),
+                  ),
+                ),
+                const SizedBox(height: 16),
+
+                FieldLabel('Date Acquired'),
+                const SizedBox(height: 8),
+                DateField(
+                  value: _dateAcquired,
+                  onChanged: (d) => setState(() => _dateAcquired = d),
                 ),
                 const SizedBox(height: 24),
 
@@ -729,6 +753,9 @@ class _EquipmentRegistrationScreenState
                 if (_brandCtrl.text.isNotEmpty) DetailRow(label: 'Brand', value: _brandCtrl.text),
                 if (_modelCtrl.text.isNotEmpty) DetailRow(label: 'Model', value: _modelCtrl.text),
                 if (_serialCtrl.text.isNotEmpty) DetailRow(label: 'Serial No.', value: _serialCtrl.text),
+                if (_iinCtrl.text.trim().isNotEmpty) DetailRow(label: 'IIN', value: _iinCtrl.text.trim()),
+                if (_dateAcquired != null)
+                  DetailRow(label: 'Date Acquired', value: formatDate(_dateAcquired!)),
                 if (_locationCtrl.text.isNotEmpty) DetailRow(label: 'Location', value: _locationCtrl.text),
                 const SizedBox(height: 28),
 

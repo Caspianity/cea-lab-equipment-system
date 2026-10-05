@@ -698,9 +698,18 @@ class ApiService {
             'brand':          data['brand'] ?? '',
             'model':          data['model'] ?? '',
             'serial_number':  data['serial_number'] ?? '',
+            // The lab's Item Identification Number and acquisition date, as on
+            // the custodian's inventory sheet (prof's comment, 2026-10-05). One
+            // sheet line covers the whole lot, so every unit gets the same.
+            'iin':            (data['iin'] as String?)?.trim() ?? '',
+            if (data['date_acquired'] is DateTime)
+              'date_acquired': Timestamp.fromDate(data['date_acquired'] as DateTime),
             // Photos are written separately by saveEquipmentPhotos once the
             // documents exist and their ids are known.
             'created_at':     FieldValue.serverTimestamp(),
+            // Who added it, shown with the date added.
+            'created_by':      Session.staffId,
+            'created_by_name': Session.name,
           });
           part.add({...unit, 'equipment_id': ref.id});
         }
@@ -746,7 +755,14 @@ class ApiService {
           };
         }
       }
-      await _db.collection('equipment').doc(equipmentId).update(data);
+      // Screens hand over a DateTime (or null to clear it); Firestore stores
+      // a Timestamp.
+      final fields = Map<String, dynamic>.from(data);
+      final acquired = fields['date_acquired'];
+      if (acquired is DateTime) {
+        fields['date_acquired'] = Timestamp.fromDate(acquired);
+      }
+      await _db.collection('equipment').doc(equipmentId).update(fields);
       return {'success': true};
     } catch (e) {
       return {'success': false, 'message': friendlyError(e)};
