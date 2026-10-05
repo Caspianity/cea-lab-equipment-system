@@ -18,7 +18,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # of the product and file versions while build-number is used as the build suffix.
 # Keep in step with kAppVersion / kAppBuild in lib/constants.dart — the About
 # screen prints those, and they are how you tell two installed builds apart.
-version: 1.0.14+15
+version: 1.0.15+16
 
 environment:
   sdk: ^3.11.1
@@ -46,6 +46,8 @@ dependencies:
   image: ^4.2.0
   qr_flutter: ^4.1.0
   shared_preferences: ^2.3.2
+  # Browser APIs for the staff web portal (the Reports CSV download).
+  web: ^1.1.1
 
 dev_dependencies:
   flutter_test:

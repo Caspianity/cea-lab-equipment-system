@@ -4,6 +4,7 @@
 // Extracted from firstFile.dart on 2026-08-03 as step 5 of the module split.
 // -----------------------------------------------------------------------------
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import '../staff/admin_dashboard_screen.dart';
 import '../student/home_screen.dart';
@@ -23,7 +24,10 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  bool _isStudent = true;
+  // The web build is the staff portal (prof's comment 2026-10-05: "web for
+  // staff only, mobile for the staff and student"), so it only ever signs in
+  // staff; students use the phone app.
+  bool _isStudent = !kIsWeb;
   bool _obscure = true;
   bool _loading = false;
   bool _rememberMe = true;
@@ -47,8 +51,9 @@ class _LoginScreenState extends State<LoginScreen> {
       if (!mounted) return;
       setState(() {
         _rememberMe = remember;
-        if (remember && savedId.isNotEmpty) {
-          _isStudent = savedIsStudent;
+        // On the web, only a saved staff sign-in is restored.
+        if (remember && savedId.isNotEmpty && (!kIsWeb || !savedIsStudent)) {
+          _isStudent = !kIsWeb && savedIsStudent;
           _identifierCtrl.text = savedId;
         }
       });
@@ -142,6 +147,15 @@ class _LoginScreenState extends State<LoginScreen> {
         const SnackBar(content: Text('Please fill in all fields.'), backgroundColor: AppTheme.danger));
       return;
     }
+    // The portal signs staff in by e-mail only. A student number typed here
+    // means a student tried the portal, so point them to the app.
+    if (kIsWeb && !id.contains('@')) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Sign in with your staff e-mail address. Students: '
+              'please use the LabTrack app on your phone.'),
+          backgroundColor: AppTheme.danger));
+      return;
+    }
     setState(() => _loading = true);
     try {
       final res = await ApiService.login(id, pw, _isStudent ? 'student' : 'staff');
@@ -155,8 +169,14 @@ class _LoginScreenState extends State<LoginScreen> {
       } else if (res['message'] == 'email_not_verified') {
         _showVerificationDialog(res['email'] as String);
       } else {
+        // A student signing in to the staff portal is refused as "no staff
+        // account"; on the web, say where students should go instead.
+        final msg = kIsWeb && res['message'] == 'Staff account not found.'
+            ? 'This portal is for laboratory staff. Students: please use the '
+                'LabTrack app on your phone.'
+            : (res['message'] ?? 'Login failed.');
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(res['message'] ?? 'Login failed.'), backgroundColor: AppTheme.danger));
+          SnackBar(content: Text(msg), backgroundColor: AppTheme.danger));
       }
     } catch (e) {
       // Never surface a raw exception to the user.
@@ -249,7 +269,7 @@ class _LoginScreenState extends State<LoginScreen> {
     return Scaffold(
       backgroundColor: AppTheme.primary,
       body: SafeArea(
-        child: Column(
+        child: _webCentered(Column(
           children: [
             const SizedBox(height: 40),
             const NeuLogo(size: 60),
@@ -274,8 +294,8 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
             ),
             const SizedBox(height: 4),
-            const Text('for School Laboratories · CEA · NEU',
-                style: TextStyle(
+            Text(kIsWeb ? 'Staff Portal · CEA · NEU' : 'for School Laboratories · CEA · NEU',
+                style: const TextStyle(
                     color: AppTheme.textLight,
                     fontSize: 11)),
             const SizedBox(height: 28),
@@ -292,29 +312,47 @@ class _LoginScreenState extends State<LoginScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const SizedBox(height: 8),
-                      // Role Toggle
-                      Container(
-                        decoration: BoxDecoration(
-                          color: AppTheme.divider,
-                          borderRadius: BorderRadius.circular(12),
+                      // Role Toggle (phone app only; the web portal is staff only)
+                      if (!kIsWeb) ...[
+                        Container(
+                          decoration: BoxDecoration(
+                            color: AppTheme.divider,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          padding: const EdgeInsets.all(4),
+                          child: Row(
+                            children: [
+                              _RoleTab(
+                                  label: 'Student',
+                                  icon: Icons.school_rounded,
+                                  selected: _isStudent,
+                                  onTap: () => _switchRole(true)),
+                              _RoleTab(
+                                  label: 'Lab Staff',
+                                  icon: Icons.admin_panel_settings_rounded,
+                                  selected: !_isStudent,
+                                  onTap: () => _switchRole(false)),
+                            ],
+                          ),
                         ),
-                        padding: const EdgeInsets.all(4),
-                        child: Row(
-                          children: [
-                            _RoleTab(
-                                label: 'Student',
-                                icon: Icons.school_rounded,
-                                selected: _isStudent,
-                                onTap: () => _switchRole(true)),
-                            _RoleTab(
-                                label: 'Lab Staff',
-                                icon: Icons.admin_panel_settings_rounded,
-                                selected: !_isStudent,
-                                onTap: () => _switchRole(false)),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 28),
+                        const SizedBox(height: 28),
+                      ] else ...[
+                        const Row(children: [
+                          Icon(Icons.admin_panel_settings_rounded,
+                              color: AppTheme.primary, size: 20),
+                          SizedBox(width: 8),
+                          Text('Lab Staff Portal',
+                              style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppTheme.primary)),
+                        ]),
+                        const SizedBox(height: 4),
+                        const Text(
+                            'Students borrow equipment with the LabTrack app on their phone.',
+                            style: TextStyle(fontSize: 12, color: AppTheme.textMid)),
+                        const SizedBox(height: 20),
+                      ],
                       const Text('Welcome back',
                           style: TextStyle(
                               fontSize: 22,
@@ -362,6 +400,12 @@ class _LoginScreenState extends State<LoginScreen> {
                       TextFormField(
                         controller: _passwordCtrl,
                         obscureText: _obscure,
+                        // Enter signs in, as a computer user expects (and the
+                        // phone keyboard's Done key does the same).
+                        textInputAction: TextInputAction.done,
+                        onFieldSubmitted: (_) {
+                          if (!_loading) _login();
+                        },
                         decoration: InputDecoration(
                           // NOT a row of bullets: "remember me" restores the
                           // identifier but never the password, so a bullet hint
@@ -460,10 +504,21 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
             ),
           ],
-        ),
+        )),
       ),
     );
   }
+
+  // On the web the sign-in column is a centred card instead of spanning the
+  // monitor; on a phone it is unchanged.
+  Widget _webCentered(Widget child) => kIsWeb
+      ? Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 480),
+            child: child,
+          ),
+        )
+      : child;
 }
 
 

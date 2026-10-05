@@ -7,6 +7,7 @@
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 import '../../constants.dart';
@@ -169,6 +170,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   @override
   Widget build(BuildContext context) {
     final tabTitles = ['Dashboard', 'Requests', 'Inventory', 'Reports'];
+    final wide = MediaQuery.sizeOf(context).width >= 900;
     return Scaffold(
       appBar: AppBar(
         title: Row(
@@ -200,8 +202,42 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           ),
         ],
       ),
-      body: Column(
+      body: Row(
         children: [
+          // A wide window (the web staff portal on a monitor) gets a side
+          // rail instead of the phone's bottom bar (prof's comment 2026-10-05).
+          if (wide) ...[
+            NavigationRail(
+              selectedIndex: _currentIndex,
+              onDestinationSelected: (i) => setState(() => _currentIndex = i),
+              labelType: NavigationRailLabelType.all,
+              backgroundColor: Colors.white,
+              selectedIconTheme: const IconThemeData(color: AppTheme.primary),
+              selectedLabelTextStyle: const TextStyle(
+                  color: AppTheme.primary, fontWeight: FontWeight.w600, fontSize: 12),
+              unselectedLabelTextStyle:
+                  const TextStyle(color: AppTheme.textMid, fontSize: 12),
+              destinations: const [
+                NavigationRailDestination(
+                    icon: Icon(Icons.dashboard_outlined),
+                    selectedIcon: Icon(Icons.dashboard_rounded),
+                    label: Text('Dashboard')),
+                NavigationRailDestination(
+                    icon: Icon(Icons.assignment_outlined),
+                    selectedIcon: Icon(Icons.assignment_rounded),
+                    label: Text('Requests')),
+                NavigationRailDestination(
+                    icon: Icon(Icons.inventory_2_outlined),
+                    selectedIcon: Icon(Icons.inventory_2_rounded),
+                    label: Text('Inventory')),
+                NavigationRailDestination(
+                    icon: Icon(Icons.bar_chart_outlined),
+                    selectedIcon: Icon(Icons.bar_chart_rounded),
+                    label: Text('Reports')),
+              ],
+            ),
+            const VerticalDivider(width: 1, color: AppTheme.divider),
+          ],
           // Keyed on the access level so a change picked up by _onAccount
           // rebuilds the open tab from scratch. Three of the four pages are
           // const, and setState skips a const page, so their Approve and Edit
@@ -214,7 +250,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           ),
         ],
       ),
-      bottomNavigationBar: Container(
+      bottomNavigationBar: wide ? null : Container(
         decoration: const BoxDecoration(
           color: Colors.white,
           boxShadow: [
@@ -365,6 +401,40 @@ class _AdminHomeState extends State<_AdminHome> {
 
   @override
   Widget build(BuildContext context) {
+    // Two stat cards per row on a phone, three on a wide browser window.
+    final statsPerRow = MediaQuery.sizeOf(context).width >= 900 ? 3 : 2;
+    final stats = [
+      _AdminStatCard(
+          label: 'Pending Requests',
+          value: '${_stats['pending_requests'] ?? 0}',
+          icon: Icons.pending_actions_rounded,
+          color: AppTheme.accent),
+      _AdminStatCard(
+          label: 'Active Loans',
+          value: '${_stats['active_loans'] ?? 0}',
+          icon: Icons.inventory_2_rounded,
+          color: AppTheme.success),
+      _AdminStatCard(
+          label: 'Overdue Items',
+          value: '${_stats['overdue_loans'] ?? 0}',
+          icon: Icons.warning_amber_rounded,
+          color: AppTheme.danger),
+      _AdminStatCard(
+          label: 'Total Equipment',
+          value: '${_stats['total_equipment'] ?? 0}',
+          icon: Icons.science_rounded,
+          color: AppTheme.primary),
+      _AdminStatCard(
+          label: 'Registered Students',
+          value: '${_stats['total_students'] ?? 0}',
+          icon: Icons.people_alt_rounded,
+          color: AppTheme.primary),
+      _AdminStatCard(
+          label: 'Students on Hold',
+          value: '${_stats['held_students'] ?? 0}',
+          icon: Icons.gpp_bad_rounded,
+          color: AppTheme.danger),
+    ];
     return Scaffold(
       body: RefreshIndicator(
         onRefresh: _load,
@@ -512,53 +582,17 @@ class _AdminHomeState extends State<_AdminHome> {
                         ),
 
                       // ── Live Stats ──
-                      IntrinsicHeight(
-                        child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                          Expanded(child: _AdminStatCard(
-                              label: 'Pending Requests',
-                              value: '${_stats['pending_requests'] ?? 0}',
-                              icon: Icons.pending_actions_rounded,
-                              color: AppTheme.accent)),
-                          const SizedBox(width: 12),
-                          Expanded(child: _AdminStatCard(
-                              label: 'Active Loans',
-                              value: '${_stats['active_loans'] ?? 0}',
-                              icon: Icons.inventory_2_rounded,
-                              color: AppTheme.success)),
-                        ]),
-                      ),
-                      const SizedBox(height: 12),
-                      IntrinsicHeight(
-                        child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                          Expanded(child: _AdminStatCard(
-                              label: 'Overdue Items',
-                              value: '${_stats['overdue_loans'] ?? 0}',
-                              icon: Icons.warning_amber_rounded,
-                              color: AppTheme.danger)),
-                          const SizedBox(width: 12),
-                          Expanded(child: _AdminStatCard(
-                              label: 'Total Equipment',
-                              value: '${_stats['total_equipment'] ?? 0}',
-                              icon: Icons.science_rounded,
-                              color: AppTheme.primary)),
-                        ]),
-                      ),
-                      const SizedBox(height: 12),
-                      IntrinsicHeight(
-                        child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                          Expanded(child: _AdminStatCard(
-                              label: 'Registered Students',
-                              value: '${_stats['total_students'] ?? 0}',
-                              icon: Icons.people_alt_rounded,
-                              color: AppTheme.primary)),
-                          const SizedBox(width: 12),
-                          Expanded(child: _AdminStatCard(
-                              label: 'Students on Hold',
-                              value: '${_stats['held_students'] ?? 0}',
-                              icon: Icons.gpp_bad_rounded,
-                              color: AppTheme.danger)),
-                        ]),
-                      ),
+                      for (var i = 0; i < stats.length; i += statsPerRow) ...[
+                        if (i > 0) const SizedBox(height: 12),
+                        IntrinsicHeight(
+                          child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                            for (var j = i; j < i + statsPerRow; j++) ...[
+                              if (j > i) const SizedBox(width: 12),
+                              Expanded(child: stats[j]),
+                            ],
+                          ]),
+                        ),
+                      ],
                       const SizedBox(height: 24),
 
                       // ── Scan QR for Return (manage rights only) ──
@@ -569,7 +603,9 @@ class _AdminHomeState extends State<_AdminHome> {
                             onPressed: () =>
                                 _openThenReload(const QRScanScreen()),
                             icon: const Icon(Icons.qr_code_scanner_rounded),
-                            label: const Text('Scan QR to Process Return'),
+                            label: Text(kIsWeb
+                                ? 'Process a Return'
+                                : 'Scan QR to Process Return'),
                             style: ElevatedButton.styleFrom(
                               backgroundColor: AppTheme.primary,
                               padding: const EdgeInsets.symmetric(vertical: 14),

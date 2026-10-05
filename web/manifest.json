@@ -1,12 +1,12 @@
 {
-    "name": "cea_lab_app",
-    "short_name": "cea_lab_app",
+    "name": "LabTrack Staff Portal",
+    "short_name": "LabTrack",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
-    "orientation": "portrait-primary",
+    "background_color": "#1B3A8C",
+    "theme_color": "#1B3A8C",
+    "description": "LabTrack Staff Portal: borrowing requests, returns, inventory and reports for the CEA laboratory of New Era University.",
+    "orientation": "any",
     "prefer_related_applications": false,
     "icons": [
         {

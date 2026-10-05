@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 // business logic no longer pulls in the UI module at all.
 import 'package:cea_lab_app/constants.dart';
 import 'package:cea_lab_app/services/api_service.dart';
+import 'package:cea_lab_app/services/report_csv.dart';
 import 'package:cea_lab_app/services/session.dart';
 
 void main() {
@@ -648,6 +649,41 @@ void main() {
     });
     test('a Lab Staff account from before the cutoff still gets in', () {
       expect(ApiService.passesVerificationGate({'role': 'staff'}, isStaff: true), isTrue);
+    });
+  });
+
+  // Web portal, Reports → "Download for Excel" (2026-10-05).
+  group('CSV export', () {
+    test('quotes commas, quotes and line breaks', () {
+      expect(ReportCsv.field('Smith, John'), '"Smith, John"');
+      expect(ReportCsv.field('a "b"'), '"a ""b"""');
+      expect(ReportCsv.field('line 1\nline 2'), '"line 1\nline 2"');
+      expect(ReportCsv.field(null), '');
+      expect(ReportCsv.field('Physics 1'), 'Physics 1');
+    });
+    test('a typed value that looks like a formula stays text', () {
+      expect(ReportCsv.field('=HYPERLINK("x")'), '"\'=HYPERLINK(""x"")"');
+      expect(ReportCsv.field('+1'), "'+1");
+      expect(ReportCsv.field('-2'), "'-2");
+      expect(ReportCsv.field('@SUM(A1)'), "'@SUM(A1)");
+    });
+    test('BOM first, CRLF rows, dates in local time', () {
+      final csv = ReportCsv.transactions([
+        {
+          'borrow_date': DateTime(2026, 10, 5, 9, 7).toIso8601String(),
+          'borrower_name': 'Dela Peña, Ana',
+          'status': 'Returned',
+          'return_date': Timestamp.fromDate(DateTime(2026, 10, 5, 16, 45)),
+        },
+      ]);
+      expect(csv.startsWith('﻿Requested,Student,'), isTrue);
+      final rows = csv.substring(1).split('\r\n');
+      expect(rows, hasLength(3)); // header, the record, '' after the last CRLF
+      expect(','.allMatches(rows[0]).length,
+          ReportCsv.transactionColumns.length - 1);
+      expect(rows[1], startsWith('2026-10-05 09:07,"Dela Peña, Ana",,'));
+      expect(rows[1], contains(',Returned,,2026-10-05 16:45,'));
+      expect(rows[2], isEmpty);
     });
   });
 }

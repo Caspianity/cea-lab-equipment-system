@@ -4,8 +4,9 @@
 // Extracted from firstFile.dart on 2026-08-03 as step 7 of the module split.
 // -----------------------------------------------------------------------------
 
-import 'dart:io';
+import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:image_picker/image_picker.dart';
@@ -400,7 +401,13 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
                                     ],
                                     const SizedBox(height: 8),
                                     Row(children: [
-                                      Expanded(child: StatusBadge(label: status, color: condColor)),
+                                      // Stretched across a browser-wide card the
+                                      // badge read as a progress bar, so the web
+                                      // keeps it to its text.
+                                      if (kIsWeb)
+                                        Flexible(child: StatusBadge(label: status, color: condColor))
+                                      else
+                                        Expanded(child: StatusBadge(label: status, color: condColor)),
                                       const SizedBox(width: 12),
                                       StatusBadge(label: e['category'] as String, color: AppTheme.primary),
                                     ]),
@@ -499,7 +506,9 @@ class _EditEquipmentSheetState extends State<_EditEquipmentSheet> {
   late String? _selectedCategory;
   late String _selectedStatus;
   late List<String> _selectedCourses;
-  XFile? _pickedImage;
+  // The picked photo's bytes: Image.memory works on the phone and on the web
+  // (Image.file has no file system in a browser).
+  Uint8List? _pickedBytes;
   bool _saving = false;
 
   final _imagePicker = ImagePicker();
@@ -534,7 +543,9 @@ class _EditEquipmentSheetState extends State<_EditEquipmentSheet> {
   Future<void> _pickImage(ImageSource source) async {
     final picked = await _imagePicker.pickImage(
         source: source, imageQuality: 80, maxWidth: 1200);
-    if (picked != null) setState(() => _pickedImage = picked);
+    if (picked == null) return;
+    final bytes = await picked.readAsBytes();
+    if (mounted) setState(() => _pickedBytes = bytes);
   }
 
   // "Added to the inventory on Oct 2, 2026 by Ramoel Bello". Records made
@@ -556,8 +567,8 @@ class _EditEquipmentSheetState extends State<_EditEquipmentSheet> {
     setState(() => _saving = true);
     try {
       String? photoError;
-      if (_pickedImage != null) {
-        final bytes = await _pickedImage!.readAsBytes();
+      final bytes = _pickedBytes;
+      if (bytes != null) {
         final saved = await ApiService.saveEquipmentPhoto(equipmentId, bytes);
         photoError = saved.error;
       }
@@ -680,17 +691,17 @@ class _EditEquipmentSheetState extends State<_EditEquipmentSheet> {
                 // Photo picker
                 FieldLabel('Equipment Photo'),
                 const SizedBox(height: 8),
-                if (_pickedImage != null)
+                if (_pickedBytes != null)
                   Stack(children: [
                     ClipRRect(
                       borderRadius: BorderRadius.circular(12),
-                      child: Image.file(File(_pickedImage!.path),
+                      child: Image.memory(_pickedBytes!,
                           height: 160, width: double.infinity, fit: BoxFit.cover),
                     ),
                     Positioned(
                       top: 8, right: 8,
                       child: GestureDetector(
-                        onTap: () => setState(() => _pickedImage = null),
+                        onTap: () => setState(() => _pickedBytes = null),
                         child: Container(
                           padding: const EdgeInsets.all(4),
                           decoration: const BoxDecoration(
@@ -728,19 +739,23 @@ class _EditEquipmentSheetState extends State<_EditEquipmentSheet> {
                   ),
                 const SizedBox(height: 10),
                 Row(children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: () => _pickImage(ImageSource.camera),
-                      icon: const Icon(Icons.camera_alt_outlined),
-                      label: const Text('Take Photo'),
+                  // A computer opens the same file picker for both, so the
+                  // web shows the one button.
+                  if (!kIsWeb) ...[
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () => _pickImage(ImageSource.camera),
+                        icon: const Icon(Icons.camera_alt_outlined),
+                        label: const Text('Take Photo'),
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 10),
+                    const SizedBox(width: 10),
+                  ],
                   Expanded(
                     child: OutlinedButton.icon(
                       onPressed: () => _pickImage(ImageSource.gallery),
                       icon: const Icon(Icons.photo_library_outlined),
-                      label: const Text('From Gallery'),
+                      label: Text(kIsWeb ? 'Choose Photo' : 'From Gallery'),
                     ),
                   ),
                 ]),

@@ -5,10 +5,13 @@
 // -----------------------------------------------------------------------------
 
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../services/api_service.dart';
+import '../../services/file_download.dart';
+import '../../services/report_csv.dart';
 import '../../theme.dart';
 import '../../widgets/common.dart';
 
@@ -221,6 +224,24 @@ class _AdminReportsScreenState extends State<AdminReportsScreen> {
     } finally {
       if (mounted) setState(() => _exporting = false);
     }
+  }
+
+  // ── Web portal: the period's requests as a spreadsheet file ───────────────
+  void _downloadCsv() {
+    final now = DateTime.now();
+    final day = '${now.year}-${now.month.toString().padLeft(2, '0')}-'
+        '${now.day.toString().padLeft(2, '0')}';
+    final ok = downloadTextFile('labtrack-requests-$day.csv',
+        ReportCsv.transactions(_allTransactions),
+        mimeType: 'text/csv');
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(ok
+          ? 'Downloaded ${_allTransactions.length} records '
+              '(last $_reportPeriodDays days). Open the file in Excel.'
+          : 'Downloading is available in the web portal.'),
+      backgroundColor: ok ? AppTheme.success : AppTheme.danger,
+      behavior: SnackBarBehavior.floating,
+    ));
   }
 
   @override
@@ -462,11 +483,28 @@ class _AdminReportsScreenState extends State<AdminReportsScreen> {
                       padding: const EdgeInsets.symmetric(vertical: 14)),
                 ),
               ),
+              if (kIsWeb) ...[
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: _allTransactions.isEmpty ? null : _downloadCsv,
+                    icon: const Icon(Icons.table_view_rounded),
+                    label: const Text('Download for Excel (.csv)'),
+                    style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 14)),
+                  ),
+                ),
+              ],
               const SizedBox(height: 8),
-              const Text(
-                'Report will be copied to your clipboard — paste it in Notes, Email, or Google Docs.',
+              Text(
+                kIsWeb
+                    ? 'Export Full Report copies a summary to your clipboard. '
+                        'Download for Excel saves every request from the last '
+                        '$_reportPeriodDays days as a spreadsheet file.'
+                    : 'Report will be copied to your clipboard — paste it in Notes, Email, or Google Docs.',
                 textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 11, color: AppTheme.textMid),
+                style: const TextStyle(fontSize: 11, color: AppTheme.textMid),
               ),
               const SizedBox(height: 20),
             ],
