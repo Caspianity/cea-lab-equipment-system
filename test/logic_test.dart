@@ -408,6 +408,75 @@ void main() {
     });
   });
 
+  // Borrowing by item type (prof's comment 2026-10-05: borrowing was
+  // confusing; the Quantity box reserved nothing).
+  group('Borrowing by item type', () {
+    test('baseNameOf strips the unit number only', () {
+      expect(ApiService.baseNameOf('Beaker 1000 mL #3'), 'Beaker 1000 mL');
+      expect(ApiService.baseNameOf('Total Station #01'), 'Total Station');
+      expect(ApiService.baseNameOf('Current Meter'), 'Current Meter');
+      // A '#' that is not a trailing unit number stays.
+      expect(ApiService.baseNameOf('Sieve #200 mesh'), 'Sieve #200 mesh');
+    });
+
+    test('unitNumberOf reads the trailing number', () {
+      expect(ApiService.unitNumberOf('Flask 500 mL #10'), 10);
+      expect(ApiService.unitNumberOf('Total Station #01'), 1);
+      expect(ApiService.unitNumberOf('Current Meter'), 0);
+    });
+
+    Map<String, dynamic> unit(String id, String name, String status) =>
+        {'equipment_id': id, 'equipment_name': name, 'status': status};
+    final beakers = [
+      unit('b3', 'Beaker 1000 mL #3', 'Available'),
+      unit('b1', 'Beaker 1000 mL #1', 'Borrowed'),
+      unit('b10', 'Beaker 1000 mL #10', 'Available'),
+      unit('b2', 'Beaker 1000 mL #2', 'Available'),
+      unit('b4', 'Beaker 1000 mL #4', 'Under Repair'),
+    ];
+
+    test('pickUnits takes free units in number order', () {
+      final got = ApiService.pickUnits(beakers, 2);
+      expect(got.map((u) => u['equipment_id']), ['b2', 'b3']);
+    });
+
+    test('pickUnits puts the unit the student looked at first', () {
+      final got = ApiService.pickUnits(beakers, 2, preferId: 'b10');
+      expect(got.map((u) => u['equipment_id']), ['b10', 'b2']);
+    });
+
+    test('pickUnits ignores a preferred unit that is not free', () {
+      final got = ApiService.pickUnits(beakers, 1, preferId: 'b1');
+      expect(got.map((u) => u['equipment_id']), ['b2']);
+    });
+
+    test('pickUnits returns fewer when not enough are free', () {
+      expect(ApiService.pickUnits(beakers, 5).length, 3);
+    });
+
+    test('records of one submit group into one request', () {
+      final t = [
+        {'student_id': 's1', 'borrow_date': '2026-10-05T15:21:00.000', 'equipment_name': 'Beaker 1000 mL #1'},
+        {'student_id': 's1', 'borrow_date': '2026-10-05T15:21:00.000', 'equipment_name': 'Beaker 1000 mL #2'},
+        {'student_id': 's2', 'borrow_date': '2026-10-05T15:21:00.000', 'equipment_name': 'Flask 500 mL #1'},
+        {'student_id': 's1', 'borrow_date': '2026-10-04T09:00:00.000', 'equipment_name': 'Rubber Mallet #1'},
+      ];
+      final groups = ApiService.groupRequests(t);
+      expect(groups.length, 3);
+      expect(groups.first.length, 2);
+      expect(ApiService.requestSummary(groups.first), 'Beaker 1000 mL × 2');
+    });
+
+    test('requestSummary lists each type once, with its count', () {
+      final records = [
+        {'equipment_name': 'Beaker 1000 mL #1'},
+        {'equipment_name': 'Flask 500 mL #4'},
+        {'equipment_name': 'Beaker 1000 mL #2'},
+      ];
+      expect(ApiService.requestSummary(records), 'Beaker 1000 mL × 2, Flask 500 mL');
+    });
+  });
+
   // Equipment dates (date acquired / date added), prof's comment 2026-10-05.
   group('formatDate', () {
     test('writes month name, day, year', () {

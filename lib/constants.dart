@@ -16,8 +16,8 @@
 // `version: <kAppVersion>+<kAppBuild>` in step. Dart cannot read pubspec at
 // runtime without adding the package_info_plus plugin, which is not worth a new
 // native dependency this close to the defense.
-const kAppVersion = '1.0.13';
-const kAppBuild = 14;
+const kAppVersion = '1.0.14';
+const kAppBuild = 15;
 
 // What the About screen prints, e.g. "Version 1.0.1 (build 2)".
 const kAppVersionLabel = 'Version $kAppVersion (build $kAppBuild)';
@@ -59,6 +59,12 @@ const kStatuses = ['Available', 'Borrowed', 'Under Repair', 'For Disposal'];
 // thousand records. Larger lots can be registered in several goes, since the
 // numbering carries on.
 const kMaxUnitsPerRegistration = 200;
+
+// Most units one borrow request may reserve. The request is written as one
+// batch, one record per unit, and the security rules read two documents for
+// each record (the student's profile and the unit); a batch may make at most
+// 20 such reads, so 8 leaves room.
+const kMaxUnitsPerRequest = 8;
 
 // ─── Staff access levels ──────────────────────────────────────────────────────
 // Mirrors the roles firestore.rules knows about. 'superadmin' was added on

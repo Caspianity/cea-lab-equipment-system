@@ -210,30 +210,6 @@ class _StudentDashboardState extends State<_StudentDashboard> {
           });
         }
       }
-      // Acknowledge the approval regardless of the due date. This used to
-      // require `!due.isBefore(now)`, which silently suppressed the card for
-      // anything approved after 5:00 PM — and since the due date IS 5:00 PM
-      // the same day, every evening approval landed already past due. The
-      // student got no confirmation at all that staff had approved them.
-      if (NotifPrefs.approved && status == 'Approved' && due != null) {
-        notes.add({
-          'icon':  Icons.check_circle_rounded,
-          'color': AppTheme.success,
-          'title': 'Request Approved',
-          'body':  'Your request for $equipName has been approved.',
-          'at':    ApiService.asDate(loan['approved_at']) ?? due,
-        });
-      }
-      if (NotifPrefs.rejected && status == 'Rejected') {
-        notes.add({
-          'icon':  Icons.cancel_rounded,
-          'color': AppTheme.danger,
-          'title': 'Request Rejected',
-          'body':  'Your request for $equipName was rejected by staff.',
-          'at':    ApiService.asDate(loan['rejected_at']) ??
-                   ApiService.asDate(loan['borrow_date']) ?? DateTime(2000),
-        });
-      }
       if (NotifPrefs.returnConfirmed && status == 'Returned') {
         notes.add({
           'icon':  Icons.assignment_turned_in_rounded,
@@ -242,6 +218,47 @@ class _StudentDashboardState extends State<_StudentDashboard> {
           'body':  'Your return of $equipName has been confirmed by staff.',
           'at':    ApiService.asDate(loan['return_date']) ??
                    ApiService.asDate(loan['borrow_date']) ?? DateTime(2000),
+        });
+      }
+    }
+
+    // Decisions are acknowledged once per request, not once per unit: a
+    // request for three beakers is one approval (2026-10-05).
+    for (final request in ApiService.groupRequests(_allLoans)) {
+      final approved = request.where((t) => t['status'] == 'Approved').toList();
+      final rejected = request.where((t) => t['status'] == 'Rejected').toList();
+      // Acknowledge the approval regardless of the due date. This used to
+      // require `!due.isBefore(now)`, which silently suppressed the card for
+      // anything approved after 5:00 PM — and since the due date IS 5:00 PM
+      // the same day, every evening approval landed already past due. The
+      // student got no confirmation at all that staff had approved them.
+      if (NotifPrefs.approved && approved.isNotEmpty) {
+        final first = approved.first;
+        final at = ApiService.asDate(first['approved_at']) ??
+            ApiService.asDate(first['due_date']);
+        if (at != null) {
+          notes.add({
+            'icon':  Icons.check_circle_rounded,
+            'color': AppTheme.success,
+            'title': 'Request Approved',
+            'body':  'Your request for ${ApiService.requestSummary(approved)} '
+                'has been approved. Pick it up at the lab.',
+            'at':    at,
+          });
+        }
+      }
+      if (NotifPrefs.rejected && rejected.isNotEmpty) {
+        final first = rejected.first;
+        // The reason staff typed used to be saved but never shown here.
+        final reason = '${first['reject_reason'] ?? ''}'.trim();
+        notes.add({
+          'icon':  Icons.cancel_rounded,
+          'color': AppTheme.danger,
+          'title': 'Request Rejected',
+          'body':  'Your request for ${ApiService.requestSummary(rejected)} was '
+              'rejected by staff${reason.isEmpty ? '.' : ': $reason'}',
+          'at':    ApiService.asDate(first['rejected_at']) ??
+                   ApiService.asDate(first['borrow_date']) ?? DateTime(2000),
         });
       }
     }
