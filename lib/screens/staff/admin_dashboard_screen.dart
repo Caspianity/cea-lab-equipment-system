@@ -654,7 +654,8 @@ class _AdminHomeState extends State<_AdminHome> {
                       else
                         ..._pending.map((e) {
                           final txId = '${e['transaction_id']}';
-                          final name = e['borrower_name'] ?? e['student_number'] ?? 'Student';
+                          // Always a String, whatever the record holds (QA 2026-10-03).
+                          final name = '${e['borrower_name'] ?? e['student_number'] ?? 'Student'}';
                           return Padding(
                             padding: const EdgeInsets.only(bottom: 10),
                             child: Container(
@@ -732,7 +733,8 @@ class _AdminHomeState extends State<_AdminHome> {
                       else
                         ..._approved.map((e) {
                           final txId = '${e['transaction_id']}';
-                          final name = e['borrower_name'] ?? e['student_number'] ?? 'Student';
+                          // Always a String, whatever the record holds (QA 2026-10-03).
+                          final name = '${e['borrower_name'] ?? e['student_number'] ?? 'Student'}';
                           final equipName = e['equipment_name'] ?? 'Equipment';
                           final dueDate = (e['due_date'] ?? '').toString().split('T').first;
                           // Every active loan was badged a green "Active",

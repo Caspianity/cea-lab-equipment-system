@@ -150,7 +150,7 @@ void main() {
 
   // Regression: registration dropped the Condition field, so every item was
   // stored Available — a scope registered For Disposal was immediately
-  // borrowable (QA 2026-09-19, M1). addEquipment now maps through here.
+  // borrowable (QA 2026-09-19, M1). addEquipmentUnits now maps through here.
   group('Registration condition to starting status', () {
     test('Good starts Available', () {
       expect(ApiService.equipmentStatusForCondition('Good'), 'Available');
@@ -163,6 +163,67 @@ void main() {
     });
     test('For Disposal does not start borrowable', () {
       expect(ApiService.equipmentStatusForCondition('For Disposal'), 'For Disposal');
+    });
+  });
+
+  // Register Equipment's Quantity used to be validated and then thrown away,
+  // so a lot of ten flasks became one record. Each unit is now its own record,
+  // named and numbered the way the 2026-10-02 import named them.
+  group('Registration: one numbered record per unit', () {
+    test('a single unit keeps its plain name', () {
+      expect(ApiService.unitNames('Current Meter', 1, const []), ['Current Meter']);
+    });
+    test('several units are numbered from #1', () {
+      expect(ApiService.unitNames('Beaker 250 mL', 3, const []),
+          ['Beaker 250 mL #1', 'Beaker 250 mL #2', 'Beaker 250 mL #3']);
+    });
+    test('numbers are padded to the width of the highest one', () {
+      final names = ApiService.unitNames('Total Station', 10, const []);
+      expect(names.first, 'Total Station #01');
+      expect(names.last, 'Total Station #10');
+      expect(names.length, 10);
+    });
+    test('numbering carries on after the units already there', () {
+      final existing = [for (var i = 1; i <= 9; i++) 'Flask 500 mL #$i'];
+      expect(ApiService.unitNames('Flask 500 mL', 3, existing),
+          ['Flask 500 mL #10', 'Flask 500 mL #11', 'Flask 500 mL #12']);
+    });
+    test('one more unit is numbered when numbered ones exist', () {
+      expect(
+          ApiService.unitNames(
+              'Flask 500 mL', 1, const ['Flask 500 mL #1', 'Flask 500 mL #2']),
+          ['Flask 500 mL #3']);
+    });
+    test('keeps the padding already in use', () {
+      expect(
+          ApiService.unitNames(
+              'Total Station', 2, const ['Total Station #01', 'Total Station #10']),
+          ['Total Station #11', 'Total Station #12']);
+      expect(ApiService.unitNames('Sieve', 1, const ['Sieve #007']), ['Sieve #008']);
+    });
+    test('ignores names that only share a prefix', () {
+      expect(
+          ApiService.unitNames(
+              'Flask', 2, const ['Flask 500 mL #4', 'Flask #2b', 'Flask']),
+          ['Flask #1', 'Flask #2']);
+    });
+  });
+
+  group('Registration: QR codes', () {
+    test('category prefix and six clock digits, one apart per unit', () {
+      expect(ApiService.qrCodesFor('Tools', 3, 1759380137900, {}),
+          ['TOO-137900', 'TOO-137901', 'TOO-137902']);
+    });
+    test('keeps leading zeros', () {
+      expect(ApiService.qrCodesFor('Optics', 1, 1759380000042, {}), ['OPT-000042']);
+    });
+    test('skips codes already in use', () {
+      expect(ApiService.qrCodesFor('Tools', 3, 1759380137900, {'TOO-137901'}),
+          ['TOO-137900', 'TOO-137902', 'TOO-137903']);
+    });
+    test('wraps around after 999999', () {
+      expect(ApiService.qrCodesFor('Other', 2, 1759380999999, {}),
+          ['OTH-999999', 'OTH-000000']);
     });
   });
 
@@ -315,6 +376,25 @@ void main() {
     test('returns null for an unparseable value rather than throwing', () {
       expect(ApiService.asDate('not a date'), isNull);
       expect(ApiService.asDate(''), isNull);
+    });
+  });
+
+  // Every staff list maps all of its records through isoDate, so it must never
+  // throw: one record holding the wrong type used to stop the whole list from
+  // loading (QA 2026-10-03).
+  group('isoDate', () {
+    test('converts a Timestamp to the ISO string the screens split on', () {
+      final when = DateTime(2026, 10, 3, 9, 30);
+      expect(ApiService.isoDate(Timestamp.fromDate(when)), when.toIso8601String());
+    });
+    test('a missing field is undated', () {
+      expect(ApiService.isoDate(null), '');
+    });
+    test('a value of any other type is undated, not an error', () {
+      expect(ApiService.isoDate('2026-10-03'), '');
+      expect(ApiService.isoDate(42), '');
+      expect(ApiService.isoDate({'seconds': 1}), '');
+      expect(ApiService.isoDate(['x']), '');
     });
   });
 

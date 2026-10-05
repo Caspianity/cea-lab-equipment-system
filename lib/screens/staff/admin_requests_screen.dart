@@ -87,7 +87,9 @@ class _AdminRequestsScreenState extends State<AdminRequestsScreen> {
     final label = isOverdue ? 'Overdue' : status;
     final sc = isOverdue ? AppTheme.danger : _statusColor(status);
     final txId = '${e['transaction_id']}';
-    final studentName = e['borrower_name'] ?? e['student_number'] ?? '';
+    // Always a String: `.isNotEmpty` and `[0]` below would throw on any other
+    // stored type and blank the card (QA 2026-10-03).
+    final studentName = '${e['borrower_name'] ?? e['student_number'] ?? ''}';
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(

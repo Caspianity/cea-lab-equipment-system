@@ -16,8 +16,8 @@
 // `version: <kAppVersion>+<kAppBuild>` in step. Dart cannot read pubspec at
 // runtime without adding the package_info_plus plugin, which is not worth a new
 // native dependency this close to the defense.
-const kAppVersion = '1.0.7';
-const kAppBuild = 8;
+const kAppVersion = '1.0.12';
+const kAppBuild = 13;
 
 // What the About screen prints, e.g. "Version 1.0.1 (build 2)".
 const kAppVersionLabel = 'Version $kAppVersion (build $kAppBuild)';
@@ -52,6 +52,13 @@ const kCategories = [
 
 // Equipment availability / condition statuses.
 const kStatuses = ['Available', 'Borrowed', 'Under Repair', 'For Disposal'];
+
+// Most units one Register Equipment submission may create. Each unit becomes
+// its own record with its own QR code; the lab's largest single line is 135
+// sieves (CE sheet), and the cap stops a stray extra zero from writing a
+// thousand records. Larger lots can be registered in several goes, since the
+// numbering carries on.
+const kMaxUnitsPerRegistration = 200;
 
 // ─── Staff access levels ──────────────────────────────────────────────────────
 // Mirrors the roles firestore.rules knows about. 'superadmin' was added on
