@@ -611,8 +611,14 @@ class _StudentDashboardState extends State<_StudentDashboard> {
                           icon: Icons.add_circle_rounded,
                           label: 'New\nRequest',
                           gradient: const [Color(0xFF1B3A8C), Color(0xFF1E4DB7)],
-                          onTap: () => Navigator.push(context,
-                              MaterialPageRoute(builder: (_) => const BorrowRequestScreen())),
+                          // Reload on the way back, so a request just sent
+                          // shows in the counts at once (it used to need a
+                          // pull-down; QA 2026-10-06).
+                          onTap: () async {
+                            await Navigator.push(context,
+                                MaterialPageRoute(builder: (_) => const BorrowRequestScreen()));
+                            if (mounted) _load();
+                          },
                         ),
                         const SizedBox(width: 10),
                         _ActionTile(
