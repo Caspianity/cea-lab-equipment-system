@@ -378,6 +378,9 @@ class _LoginScreenState extends State<LoginScreen> {
                         keyboardType: _isStudent
                             ? TextInputType.text
                             : TextInputType.emailAddress,
+                        // The keyboard key moves on to the password (it was
+                        // "Done", which only closed the keyboard; QA 2026-10-06).
+                        textInputAction: TextInputAction.next,
                         autocorrect: false,
                         decoration: InputDecoration(
                           hintText: _isStudent

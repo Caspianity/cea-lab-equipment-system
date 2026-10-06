@@ -476,6 +476,43 @@ void main() {
       ];
       expect(ApiService.requestSummary(records), 'Beaker 1000 mL × 2, Flask 500 mL');
     });
+
+    // QA 2026-10-06: the same request read "Flask, Beaker × 2" on one screen
+    // and "Beaker × 2, Flask" on another, following the record order.
+    test('requestSummary is alphabetical whatever the record order', () {
+      final records = [
+        {'equipment_name': 'Flask 500 mL #1'},
+        {'equipment_name': 'Beaker 1000 mL #2'},
+        {'equipment_name': 'Air-Content Apparatus'},
+        {'equipment_name': 'Beaker 1000 mL #1'},
+      ];
+      expect(ApiService.requestSummary(records),
+          'Air-Content Apparatus, Beaker 1000 mL × 2, Flask 500 mL');
+    });
+
+    // QA 2026-10-06: a request partly returned and partly rejected showed as
+    // one "Returned" card, rejected items included.
+    test('groupRequests byStatus splits a request by its status', () {
+      Map<String, dynamic> rec(String name, String status) => {
+            'student_id': 's1',
+            'borrow_date': '2026-10-06T12:00:00.000',
+            'equipment_name': name,
+            'status': status,
+          };
+      final t = [
+        rec('Depth Gauge with Torpedo #2', 'Returned'),
+        rec('Beaker 1000 mL #1', 'Returned'),
+        rec('Air-Content Apparatus', 'Rejected'),
+        rec('Depth Gauge with Torpedo #2', 'Rejected'),
+      ];
+      expect(ApiService.groupRequests(t).length, 1);
+      final split = ApiService.groupRequests(t, byStatus: true);
+      expect(split.length, 2);
+      expect(split.map((g) => g.map((r) => r['status']).toSet()),
+          [{'Returned'}, {'Rejected'}]);
+      expect(ApiService.requestSummary(split.last),
+          'Air-Content Apparatus, Depth Gauge with Torpedo');
+    });
   });
 
   // Equipment dates (date acquired / date added), prof's comment 2026-10-05.

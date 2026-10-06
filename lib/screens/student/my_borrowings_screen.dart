@@ -51,6 +51,12 @@ class _MyBorrowingsScreenState extends State<MyBorrowingsScreen> {
         final active  = all.where((e) => e['status'] == 'Approved').toList();
         final pending = all.where((e) => e['status'] == 'Pending').toList();
         final history = all.where((e) => e['status'] == 'Returned' || e['status'] == 'Rejected').toList();
+        // Requests with something already returned: their Active card asks for
+        // the rest back instead of "Pick it up".
+        final partlyBack = {
+          for (final e in all)
+            if (e['status'] == 'Returned') ApiService.requestKey(e),
+        };
 
         return DefaultTabController(
           length: 3,
@@ -66,9 +72,12 @@ class _MyBorrowingsScreenState extends State<MyBorrowingsScreen> {
             ),
             body: TabBarView(
               children: [
-                _RequestList(items: active),
+                _RequestList(items: active, partlyBack: partlyBack),
                 _RequestList(items: pending),
-                _RequestList(items: history),
+                // Split by status too: a request can end partly returned and
+                // partly rejected, and one card for both read "Returned" for
+                // items that were never lent (QA 2026-10-06).
+                _RequestList(items: history, byStatus: true),
               ],
             ),
           ),
@@ -80,7 +89,10 @@ class _MyBorrowingsScreenState extends State<MyBorrowingsScreen> {
 
 class _RequestList extends StatelessWidget {
   final List<dynamic> items;
-  const _RequestList({required this.items});
+  final bool byStatus;
+  final Set<String> partlyBack;
+  const _RequestList(
+      {required this.items, this.byStatus = false, this.partlyBack = const {}});
 
   @override
   Widget build(BuildContext context) {
@@ -97,14 +109,16 @@ class _RequestList extends StatelessWidget {
         ]),
       ]));
     }
-    final requests = ApiService.groupRequests(items);
+    final requests = ApiService.groupRequests(items, byStatus: byStatus);
     return Material(
       color: Colors.transparent,
       child: ListView.separated(
         padding: const EdgeInsets.all(16),
         itemCount: requests.length,
         separatorBuilder: (_, _) => const SizedBox(height: 10),
-        itemBuilder: (_, i) => _RequestCard(request: requests[i]),
+        itemBuilder: (_, i) => _RequestCard(
+            request: requests[i],
+            partlyBack: partlyBack.contains(ApiService.requestKey(requests[i].first))),
       ),
     );
   }
@@ -113,7 +127,41 @@ class _RequestList extends StatelessWidget {
 // One request: its items, its status, and what the student should do next.
 class _RequestCard extends StatelessWidget {
   final List<dynamic> request;
-  const _RequestCard({required this.request});
+  // Some of this request is already back (Active tab only).
+  final bool partlyBack;
+  const _RequestCard({required this.request, this.partlyBack = false});
+
+  // The records grouped by item type, alphabetically.
+  static List<List<dynamic>> _byType(List<dynamic> records) {
+    final types = <String, List<dynamic>>{};
+    for (final t in records) {
+      types.putIfAbsent(ApiService.baseNameOf('${t['equipment_name'] ?? ''}'), () => []).add(t);
+    }
+    final names = types.keys.toList()..sort();
+    return [for (final n in names) types[n]!];
+  }
+
+  Widget _itemRow(dynamic e, String title, String? code) => Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Row(children: [
+          EquipmentThumb(
+            bytes: photoThumbOf(e),
+            category: e['category'] as String? ?? '',
+            color: AppTheme.primary,
+            size: 40,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(title,
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppTheme.textDark)),
+              if (code != null && code.isNotEmpty)
+                Text(code,
+                    style: const TextStyle(fontSize: 12, color: AppTheme.textMid)),
+            ]),
+          ),
+        ]),
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -146,6 +194,9 @@ class _RequestCard extends StatelessWidget {
       'Approved' when overdue => (Icons.warning_amber_rounded,
           'Overdue: it was due back by ${when(due)}. Return it to '
               'the lab as soon as possible. You cannot borrow anything else until you do.'),
+      'Approved' when partlyBack => (Icons.check_circle_outline_rounded,
+          'Part of this request is back. Return the rest by '
+              '${due == null ? '5:00 PM today' : when(due)}.'),
       'Approved' => (Icons.check_circle_outline_rounded,
           'Approved. Pick it up at the lab, and return it by '
               '${due == null ? '5:00 PM today' : when(due)}.'),
@@ -169,27 +220,21 @@ class _RequestCard extends StatelessWidget {
           StatusBadge(label: label, color: color),
         ]),
         const SizedBox(height: 10),
-        for (final e in request)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Row(children: [
-              EquipmentThumb(
-                bytes: photoThumbOf(e),
-                category: e['category'] as String? ?? '',
-                color: AppTheme.primary,
-                size: 40,
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text('${e['equipment_name'] ?? ''}',
-                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppTheme.textDark)),
-                  Text('${e['qr_code'] ?? ''}',
-                      style: const TextStyle(fontSize: 12, color: AppTheme.textMid)),
-                ]),
-              ),
-            ]),
-          ),
+        // Lent units by name and code. A pending or rejected request has no
+        // unit of its own yet: the one it reserved can change at approval, and
+        // showing it put "Depth Gauge #2" on a student's Pending card while the
+        // same unit was on their Active one (QA 2026-10-06). So those list the
+        // item types they asked for.
+        if (status == 'Pending' || status == 'Rejected')
+          for (final type in _byType(request))
+            _itemRow(type.first,
+                type.length > 1
+                    ? '${ApiService.baseNameOf('${type.first['equipment_name'] ?? ''}')} × ${type.length}'
+                    : ApiService.baseNameOf('${type.first['equipment_name'] ?? ''}'),
+                null)
+        else
+          for (final e in request)
+            _itemRow(e, '${e['equipment_name'] ?? ''}', '${e['qr_code'] ?? ''}'),
 
         // Next step.
         Container(

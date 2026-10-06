@@ -915,24 +915,32 @@ class ApiService {
   static String requestKey(dynamic t) => '${t['student_id']}|${t['borrow_date']}';
 
   // [txns] grouped into requests, in order of first appearance (the lists
-  // arrive newest first).
-  static List<List<dynamic>> groupRequests(List<dynamic> txns) {
+  // arrive newest first). [byStatus] also splits a request by status: a
+  // request can end partly returned and partly rejected (units that ran out
+  // before approval), and a card for both at once took its label from one
+  // record, so rejected items read "Returned. Thank you!" (QA 2026-10-06).
+  static List<List<dynamic>> groupRequests(List<dynamic> txns,
+      {bool byStatus = false}) {
     final groups = <String, List<dynamic>>{};
     for (final t in txns) {
-      groups.putIfAbsent(requestKey(t), () => []).add(t);
+      final key = byStatus ? '${requestKey(t)}|${t['status']}' : requestKey(t);
+      groups.putIfAbsent(key, () => []).add(t);
     }
     return groups.values.toList();
   }
 
   // "Beaker 1000 mL × 2, Flask 500 mL" for a request's records (or units).
+  // Alphabetical, so one request reads the same on every screen (the order
+  // used to follow the records, which differs from list to list).
   static String requestSummary(List<dynamic> records) {
     final counts = <String, int>{};
     for (final t in records) {
       final base = baseNameOf('${t['equipment_name'] ?? 'Equipment'}');
       counts[base] = (counts[base] ?? 0) + 1;
     }
-    return counts.entries
-        .map((e) => e.value > 1 ? '${e.key} × ${e.value}' : e.key)
+    final names = counts.keys.toList()..sort();
+    return names
+        .map((n) => counts[n]! > 1 ? '$n × ${counts[n]}' : n)
         .join(', ');
   }
 

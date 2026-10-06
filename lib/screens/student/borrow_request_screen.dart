@@ -273,6 +273,19 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
   @override
   void initState() {
     super.initState();
+    // A student on hold only found out on Submit, after filling the whole
+    // form (QA 2026-10-06). Re-read the hold, as Home does, and say it up
+    // front. Submit still asks the server, which has the last word.
+    final sid = Session.currentUser?['student_id']?.toString() ?? '';
+    if (sid.isNotEmpty) {
+      ApiService.getStudent(sid).then((fresh) {
+        if (!mounted || fresh == null || Session.currentUser == null) return;
+        setState(() {
+          Session.currentUser!['hold'] = fresh['hold'] ?? false;
+          Session.currentUser!['hold_reason'] = fresh['hold_reason'] ?? '';
+        });
+      }).catchError((_) {});
+    }
     // Arrived from the catalog: start the request with that item's type.
     final e = widget.equipment;
     final rawName = '${e?['equipment_name'] ?? widget.equipmentName ?? ''}';
@@ -304,6 +317,12 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
   }
 
   Future<void> _addItems() async {
+    // Full already: say so here instead of opening the picker and refusing
+    // the pick afterwards (QA 2026-10-06).
+    if (_total >= kMaxUnitsPerRequest) {
+      _warn('At most $kMaxUnitsPerRequest items per request.');
+      return;
+    }
     final picked = await showModalBottomSheet<Map<String, dynamic>>(
       context: context,
       isScrollControlled: true,
@@ -502,6 +521,30 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            if (Session.isOnHold)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(14),
+                margin: const EdgeInsets.only(bottom: 16),
+                decoration: BoxDecoration(
+                  color: const Color(0x1AE74C3C),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: AppTheme.danger.withValues(alpha: 0.4)),
+                ),
+                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Icon(Icons.gpp_bad_rounded, color: AppTheme.danger, size: 22),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      'Borrowing on hold. You cannot send a request until the '
+                      'laboratory staff lift it.'
+                      '${Session.holdReason.isNotEmpty ? '\n${Session.holdReason}' : ''}',
+                      style: const TextStyle(
+                          fontSize: 12, color: AppTheme.textDark, height: 1.4),
+                    ),
+                  ),
+                ]),
+              ),
             // ── 1. What to borrow ──
             FieldLabel('Equipment'),
             const SizedBox(height: 8),

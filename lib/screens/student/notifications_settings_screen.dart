@@ -74,7 +74,12 @@ class _NotificationsSettingsScreenState extends State<NotificationsSettingsScree
         subtitle: Text(subtitle,
             style: const TextStyle(fontSize: 12, color: AppTheme.textMid)),
         value: value,
-        onChanged: onChanged,
+        // Saved as soon as it is switched: Back used to throw the change away
+        // unless Save Preferences was tapped first (QA 2026-10-06).
+        onChanged: (v) {
+          onChanged(v);
+          _save();
+        },
         activeThumbColor: activeColor ?? AppTheme.primary,
       ),
     );
@@ -111,7 +116,8 @@ class _NotificationsSettingsScreenState extends State<NotificationsSettingsScree
             const SizedBox(height: 12),
             _notifTile(
               title: 'Due Soon Reminder',
-              subtitle: 'Get reminded 1 day before equipment is due',
+              // Loans are due the same day, so there is no "1 day before".
+              subtitle: 'On the day your equipment is due back (by 5:00 PM)',
               value: _dueSoon,
               onChanged: (v) => setState(() => _dueSoon = v),
               activeColor: AppTheme.warning,
@@ -125,7 +131,7 @@ class _NotificationsSettingsScreenState extends State<NotificationsSettingsScree
             ),
             const SizedBox(height: 20),
 
-            const SectionHeader(title: 'Returns & Reports'),
+            const SectionHeader(title: 'Returns'),
             const SizedBox(height: 12),
             _notifTile(
               title: 'Return Confirmed',
@@ -133,12 +139,9 @@ class _NotificationsSettingsScreenState extends State<NotificationsSettingsScree
               value: _returnConfirmed,
               onChanged: (v) => setState(() => _returnConfirmed = v),
             ),
-            _notifTile(
-              title: 'Damage Report Update',
-              subtitle: 'Updates on your submitted damage reports',
-              value: _damageUpdate,
-              onChanged: (v) => setState(() => _damageUpdate = v),
-            ),
+            // "Damage Report Update" was removed here (QA 2026-10-06): nothing
+            // ever read it, and students cannot read damage reports under the
+            // rules, so the switch did nothing.
             const SizedBox(height: 24),
 
             SizedBox(

@@ -528,6 +528,9 @@ class _EditEquipmentSheetState extends State<_EditEquipmentSheet> {
   final _statuses    = kStatuses;
   final _categories  = kCategories;
 
+  // Out on a loan right now (see the Status picker).
+  bool get _onLoan => widget.equipment['status'] == 'Borrowed';
+
   @override
   void initState() {
     super.initState();
@@ -785,17 +788,35 @@ class _EditEquipmentSheetState extends State<_EditEquipmentSheet> {
                           color: Colors.white,
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(color: AppTheme.divider)),
+                      // "Borrowed" belongs to a loan: only an approval sets it
+                      // and only a return clears it. Picking it here left an
+                      // item out with no loan to return, and picking anything
+                      // else for an item on loan orphaned the loan (QA
+                      // 2026-10-06). So it is never offered, and an item on
+                      // loan keeps it until it comes back.
                       child: DropdownButtonHideUnderline(
                         child: DropdownButton<String>(
                           isExpanded: true,
                           value: _selectedStatus,
-                          items: _statuses.map((s) => DropdownMenuItem(
-                              value: s,
-                              child: Text(s, style: const TextStyle(fontSize: 13)))).toList(),
-                          onChanged: (v) => setState(() => _selectedStatus = v!),
+                          items: (_onLoan
+                                  ? const ['Borrowed']
+                                  : _statuses.where((s) => s != 'Borrowed'))
+                              .map((s) => DropdownMenuItem(
+                                  value: s,
+                                  child: Text(s, style: const TextStyle(fontSize: 13))))
+                              .toList(),
+                          onChanged: _onLoan
+                              ? null
+                              : (v) => setState(() => _selectedStatus = v!),
                         ),
                       ),
                     ),
+                    if (_onLoan)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 4),
+                        child: Text('On loan. Its return will change this.',
+                            style: TextStyle(fontSize: 11, color: AppTheme.textMid)),
+                      ),
                   ])),
                   const SizedBox(width: 12),
                   Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
