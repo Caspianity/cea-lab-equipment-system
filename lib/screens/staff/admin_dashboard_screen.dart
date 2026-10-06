@@ -399,10 +399,130 @@ class _AdminHomeState extends State<_AdminHome> {
     if (mounted) _load();
   }
 
+  // ── Pending Approvals ──
+  List<Widget> _pendingSection() => [
+        SectionHeader(
+            title: 'Pending Approvals (${ApiService.groupRequests(_pending).length})',
+            action: 'View all',
+            onAction: () {}),
+        const SizedBox(height: 12),
+        if (_pending.isEmpty)
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16)),
+            child: const Center(
+              child: Column(children: [
+                Icon(Icons.check_circle_outline_rounded,
+                    color: AppTheme.success, size: 36),
+                SizedBox(height: 8),
+                Text('No pending requests',
+                    style: TextStyle(color: AppTheme.textMid, fontSize: 13)),
+              ]),
+            ),
+          )
+        else
+          // One card per request, however many units it holds.
+          for (final request in ApiService.groupRequests(_pending))
+            PendingRequestCard(
+              request: request,
+              onApprove: () => _approve(request),
+              onReject: () => _reject(request),
+            ),
+      ];
+
+  // ── Active Loans (Approved — awaiting return) ──
+  List<Widget> _activeSection() => [
+        SectionHeader(
+            title: 'Active Loans (${_approved.length})',
+            action: 'View all',
+            onAction: () {}),
+        const SizedBox(height: 12),
+        if (_approved.isEmpty)
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16)),
+            child: const Center(
+              child: Text('No active loans',
+                  style: TextStyle(color: AppTheme.textMid, fontSize: 13)),
+            ),
+          )
+        else
+          ..._approved.map((e) {
+            // Always a String, whatever the record holds (QA 2026-10-03).
+            final name = '${e['borrower_name'] ?? e['student_number'] ?? 'Student'}';
+            final equipName = e['equipment_name'] ?? 'Equipment';
+            final dueDate = (e['due_date'] ?? '').toString().split('T').first;
+            // Every active loan was badged a green "Active",
+            // including ones already past due, so the Dashboard
+            // gave staff no way to see which (QA 2026-09-19,
+            // low #8). The stored status is unchanged.
+            final due = ApiService.asDate(e['due_date']);
+            final isOverdue =
+                due != null && due.isBefore(DateTime.now());
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: const Color(0x3306D6A0))),
+                child: Column(children: [
+                  Row(children: [
+                    Container(
+                      width: 40, height: 40,
+                      decoration: BoxDecoration(
+                          color: const Color(0x1A06D6A0),
+                          borderRadius: BorderRadius.circular(10)),
+                      child: const Icon(Icons.science_outlined,
+                          color: AppTheme.success, size: 20),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text(equipName, style: const TextStyle(
+                          fontWeight: FontWeight.bold, fontSize: 13,
+                          color: AppTheme.textDark)),
+                      Text('$name  •  Due: $dueDate',
+                          style: const TextStyle(fontSize: 11, color: AppTheme.textMid)),
+                    ])),
+                    StatusBadge(
+                        label: isOverdue ? 'Overdue' : 'Active',
+                        color: isOverdue
+                            ? AppTheme.danger
+                            : AppTheme.success),
+                  ]),
+                  if (Session.canManage) ...[
+                    const SizedBox(height: 12),
+                    const Divider(color: AppTheme.divider, height: 1),
+                    const SizedBox(height: 10),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        onPressed: () => _return(e),
+                        icon: const Icon(Icons.assignment_return_rounded, size: 16),
+                        label: const Text('Mark as Returned'),
+                        style: ElevatedButton.styleFrom(
+                            backgroundColor: AppTheme.primary),
+                      ),
+                    ),
+                  ],
+                ]),
+              ),
+            );
+          }),
+      ];
+
   @override
   Widget build(BuildContext context) {
-    // Two stat cards per row on a phone, three on a wide browser window.
-    final statsPerRow = MediaQuery.sizeOf(context).width >= 900 ? 3 : 2;
+    // Two stat cards per row on a phone, three on a wide browser window, all
+    // six in one row on a full-size monitor.
+    final width = MediaQuery.sizeOf(context).width;
+    final statsPerRow = width >= 1400 ? 6 : width >= 900 ? 3 : 2;
     final stats = [
       _AdminStatCard(
           label: 'Pending Requests',
@@ -435,6 +555,55 @@ class _AdminHomeState extends State<_AdminHome> {
           icon: Icons.gpp_bad_rounded,
           color: AppTheme.danger),
     ];
+    final processReturn = ElevatedButton.icon(
+      onPressed: () => _openThenReload(const QRScanScreen()),
+      icon: const Icon(Icons.qr_code_scanner_rounded),
+      label: Text(kIsWeb ? 'Process a Return' : 'Scan QR to Process Return'),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: AppTheme.primary,
+        padding: const EdgeInsets.symmetric(vertical: 14),
+      ),
+    );
+    final damage = OutlinedButton.icon(
+      onPressed: () => _openThenReload(const AdminDamageReportsScreen()),
+      icon: const Icon(Icons.report_problem_outlined, size: 18),
+      label: Text('Damage (${_stats['damage_reports'] ?? 0})'),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: AppTheme.warning,
+        side: const BorderSide(color: AppTheme.warning),
+        padding: const EdgeInsets.symmetric(vertical: 12),
+      ),
+    );
+    final penalties = OutlinedButton.icon(
+      onPressed: () => _openThenReload(const AdminPenaltiesScreen()),
+      icon: const Icon(Icons.gpp_maybe_outlined, size: 18),
+      label: const Text('Penalties'),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: AppTheme.danger,
+        side: const BorderSide(color: AppTheme.danger),
+        padding: const EdgeInsets.symmetric(vertical: 12),
+      ),
+    );
+    final staffAccounts = OutlinedButton.icon(
+      onPressed: () => _openThenReload(const AdminStaffAccountsScreen()),
+      icon: const Icon(Icons.manage_accounts_outlined, size: 18),
+      label: const Text('Staff Accounts'),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: AppTheme.accent,
+        side: const BorderSide(color: AppTheme.accent),
+        padding: const EdgeInsets.symmetric(vertical: 12),
+      ),
+    );
+    final students = OutlinedButton.icon(
+      onPressed: () => _openThenReload(const AdminStudentsScreen()),
+      icon: const Icon(Icons.people_alt_outlined, size: 18),
+      label: const Text('Students'),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: AppTheme.primary,
+        side: const BorderSide(color: AppTheme.primary),
+        padding: const EdgeInsets.symmetric(vertical: 12),
+      ),
+    );
     return Scaffold(
       body: RefreshIndicator(
         onRefresh: _load,
@@ -595,203 +764,77 @@ class _AdminHomeState extends State<_AdminHome> {
                       ],
                       const SizedBox(height: 24),
 
-                      // ── Scan QR for Return (manage rights only) ──
-                      if (Session.canManage) ...[
-                        SizedBox(
-                          width: double.infinity,
-                          child: ElevatedButton.icon(
-                            onPressed: () =>
-                                _openThenReload(const QRScanScreen()),
-                            icon: const Icon(Icons.qr_code_scanner_rounded),
-                            label: Text(kIsWeb
-                                ? 'Process a Return'
-                                : 'Scan QR to Process Return'),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: AppTheme.primary,
-                              padding: const EdgeInsets.symmetric(vertical: 14),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                      ],
-                      // ── Damage reports + penalties quick access (all staff) ──
-                      Row(children: [
-                        Expanded(child: OutlinedButton.icon(
-                          onPressed: () =>
-                              _openThenReload(const AdminDamageReportsScreen()),
-                          icon: const Icon(Icons.report_problem_outlined, size: 18),
-                          label: Text('Damage (${_stats['damage_reports'] ?? 0})'),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: AppTheme.warning,
-                            side: const BorderSide(color: AppTheme.warning),
-                            padding: const EdgeInsets.symmetric(vertical: 12),
-                          ),
-                        )),
-                        const SizedBox(width: 12),
-                        Expanded(child: OutlinedButton.icon(
-                          onPressed: () =>
-                              _openThenReload(const AdminPenaltiesScreen()),
-                          icon: const Icon(Icons.gpp_maybe_outlined, size: 18),
-                          label: const Text('Penalties'),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: AppTheme.danger,
-                            side: const BorderSide(color: AppTheme.danger),
-                            padding: const EdgeInsets.symmetric(vertical: 12),
-                          ),
-                        )),
-                      ]),
-                      const SizedBox(height: 12),
-                      // ── Staff accounts (super admin only) ──
-                      // The rules refuse this to everyone else, so hiding it is
-                      // a courtesy, not the control.
-                      if (Session.isSuper) ...[
-                        SizedBox(
-                          width: double.infinity,
-                          child: OutlinedButton.icon(
-                            onPressed: () =>
-                                _openThenReload(const AdminStaffAccountsScreen()),
-                            icon: const Icon(Icons.manage_accounts_outlined, size: 18),
-                            label: const Text('Staff Accounts'),
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: AppTheme.accent,
-                              side: const BorderSide(color: AppTheme.accent),
-                              padding: const EdgeInsets.symmetric(vertical: 12),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                      ],
-                      // ── Students directory (all staff; viewer is read-only) ──
-                      SizedBox(
-                        width: double.infinity,
-                        child: OutlinedButton.icon(
-                          onPressed: () =>
-                              _openThenReload(const AdminStudentsScreen()),
-                          icon: const Icon(Icons.people_alt_outlined, size: 18),
-                          label: const Text('Students'),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: AppTheme.primary,
-                            side: const BorderSide(color: AppTheme.primary),
-                            padding: const EdgeInsets.symmetric(vertical: 12),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 24),
-
-                      // ── Pending Approvals ──
-                      SectionHeader(
-                          title: 'Pending Approvals (${ApiService.groupRequests(_pending).length})',
-                          action: 'View all',
-                          onAction: () {}),
-                      const SizedBox(height: 12),
-                      if (_pending.isEmpty)
-                        Container(
-                          padding: const EdgeInsets.all(20),
-                          decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(16)),
-                          child: const Center(
-                            child: Column(children: [
-                              Icon(Icons.check_circle_outline_rounded,
-                                  color: AppTheme.success, size: 36),
-                              SizedBox(height: 8),
-                              Text('No pending requests',
-                                  style: TextStyle(color: AppTheme.textMid, fontSize: 13)),
-                            ]),
+                      // ── Quick actions: one row on a wide window ──
+                      if (width >= 900)
+                        IntrinsicHeight(
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              if (Session.canManage) ...[
+                                Expanded(child: processReturn),
+                                const SizedBox(width: 12),
+                              ],
+                              Expanded(child: damage),
+                              const SizedBox(width: 12),
+                              Expanded(child: penalties),
+                              if (Session.isSuper) ...[
+                                const SizedBox(width: 12),
+                                Expanded(child: staffAccounts),
+                              ],
+                              const SizedBox(width: 12),
+                              Expanded(child: students),
+                            ],
                           ),
                         )
-                      else
-                        // One card per request, however many units it holds.
-                        for (final request in ApiService.groupRequests(_pending))
-                          PendingRequestCard(
-                            request: request,
-                            onApprove: () => _approve(request),
-                            onReject: () => _reject(request),
-                          ),
+                      else ...[
+                        // ── Scan QR for Return (manage rights only) ──
+                        if (Session.canManage) ...[
+                          SizedBox(width: double.infinity, child: processReturn),
+                          const SizedBox(height: 12),
+                        ],
+                        // ── Damage reports + penalties quick access (all staff) ──
+                        Row(children: [
+                          Expanded(child: damage),
+                          const SizedBox(width: 12),
+                          Expanded(child: penalties),
+                        ]),
+                        const SizedBox(height: 12),
+                        // ── Staff accounts (super admin only) ──
+                        // The rules refuse this to everyone else, so hiding it
+                        // is a courtesy, not the control.
+                        if (Session.isSuper) ...[
+                          SizedBox(width: double.infinity, child: staffAccounts),
+                          const SizedBox(height: 12),
+                        ],
+                        // ── Students directory (all staff; viewer is read-only) ──
+                        SizedBox(width: double.infinity, child: students),
+                      ],
                       const SizedBox(height: 24),
 
-                      // ── Active Loans (Approved — awaiting return) ──
-                      SectionHeader(
-                          title: 'Active Loans (${_approved.length})',
-                          action: 'View all',
-                          onAction: () {}),
-                      const SizedBox(height: 12),
-                      if (_approved.isEmpty)
-                        Container(
-                          padding: const EdgeInsets.all(20),
-                          decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(16)),
-                          child: const Center(
-                            child: Text('No active loans',
-                                style: TextStyle(color: AppTheme.textMid, fontSize: 13)),
-                          ),
-                        )
-                      else
-                        ..._approved.map((e) {
-                          // Always a String, whatever the record holds (QA 2026-10-03).
-                          final name = '${e['borrower_name'] ?? e['student_number'] ?? 'Student'}';
-                          final equipName = e['equipment_name'] ?? 'Equipment';
-                          final dueDate = (e['due_date'] ?? '').toString().split('T').first;
-                          // Every active loan was badged a green "Active",
-                          // including ones already past due, so the Dashboard
-                          // gave staff no way to see which (QA 2026-09-19,
-                          // low #8). The stored status is unchanged.
-                          final due = ApiService.asDate(e['due_date']);
-                          final isOverdue =
-                              due != null && due.isBefore(DateTime.now());
-                          return Padding(
-                            padding: const EdgeInsets.only(bottom: 10),
-                            child: Container(
-                              padding: const EdgeInsets.all(16),
-                              decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  borderRadius: BorderRadius.circular(16),
-                                  border: Border.all(color: const Color(0x3306D6A0))),
-                              child: Column(children: [
-                                Row(children: [
-                                  Container(
-                                    width: 40, height: 40,
-                                    decoration: BoxDecoration(
-                                        color: const Color(0x1A06D6A0),
-                                        borderRadius: BorderRadius.circular(10)),
-                                    child: const Icon(Icons.science_outlined,
-                                        color: AppTheme.success, size: 20),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  Expanded(child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                    Text(equipName, style: const TextStyle(
-                                        fontWeight: FontWeight.bold, fontSize: 13,
-                                        color: AppTheme.textDark)),
-                                    Text('$name  •  Due: $dueDate',
-                                        style: const TextStyle(fontSize: 11, color: AppTheme.textMid)),
-                                  ])),
-                                  StatusBadge(
-                                      label: isOverdue ? 'Overdue' : 'Active',
-                                      color: isOverdue
-                                          ? AppTheme.danger
-                                          : AppTheme.success),
-                                ]),
-                                if (Session.canManage) ...[
-                                  const SizedBox(height: 12),
-                                  const Divider(color: AppTheme.divider, height: 1),
-                                  const SizedBox(height: 10),
-                                  SizedBox(
-                                    width: double.infinity,
-                                    child: ElevatedButton.icon(
-                                      onPressed: () => _return(e),
-                                      icon: const Icon(Icons.assignment_return_rounded, size: 16),
-                                      label: const Text('Mark as Returned'),
-                                      style: ElevatedButton.styleFrom(
-                                          backgroundColor: AppTheme.primary),
-                                    ),
-                                  ),
-                                ],
-                              ]),
+                      // ── Pending Approvals and Active Loans ──
+                      // Side by side on a full-size monitor.
+                      if (width >= 1200)
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: _pendingSection()),
                             ),
-                          );
-                        }),
+                            const SizedBox(width: 20),
+                            Expanded(
+                              child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: _activeSection()),
+                            ),
+                          ],
+                        )
+                      else ...[
+                        ..._pendingSection(),
+                        const SizedBox(height: 24),
+                        ..._activeSection(),
+                      ],
                       const SizedBox(height: 20),
                     ],
                   ),

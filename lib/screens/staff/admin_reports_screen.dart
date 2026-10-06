@@ -250,10 +250,68 @@ class _AdminReportsScreenState extends State<AdminReportsScreen> {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
-    // Build most borrowed bars
-    final maxCount = _mostBorrowed.values.isEmpty
-        ? 1
-        : _mostBorrowed.values.reduce((a, b) => a > b ? a : b);
+    // Two report cards per row on a phone, three on a wide window, all six in
+    // one row on a full-size monitor (as on the Dashboard).
+    final width = MediaQuery.sizeOf(context).width;
+    final cardsPerRow = width >= 1400 ? 6 : width >= 900 ? 3 : 2;
+    final cards = [
+      _ReportCard(
+        label: 'Total\nBorrowings',
+        value: '$_totalBorrowings',
+        icon: Icons.trending_up_rounded,
+        color: AppTheme.accent,
+      ),
+      _ReportCard(
+        label: 'On-Time\nReturns',
+        value: '${_onTimeRate.toStringAsFixed(0)}%',
+        icon: Icons.check_circle_outline_rounded,
+        color: AppTheme.success,
+      ),
+      _ReportCard(
+        label: 'Overdue\nItems',
+        value: '$_totalOverdue',
+        icon: Icons.warning_amber_rounded,
+        color: AppTheme.danger,
+      ),
+      _ReportCard(
+        label: 'Damage\nReports',
+        value: '$_totalDamage',
+        icon: Icons.report_problem_outlined,
+        color: AppTheme.warning,
+      ),
+      _ReportCard(
+        label: 'Total\nEquipment',
+        value: '$_totalEquipment',
+        icon: Icons.science_rounded,
+        color: AppTheme.primary,
+      ),
+      _ReportCard(
+        label: 'Returned\nSuccessfully',
+        value: '$_totalReturned',
+        icon: Icons.assignment_return_rounded,
+        color: AppTheme.success,
+      ),
+    ];
+    final exportButton = ElevatedButton.icon(
+      onPressed: _exporting ? null : _exportReport,
+      icon: _exporting
+          ? const SizedBox(
+              width: 16, height: 16,
+              child: CircularProgressIndicator(
+                  color: Colors.white, strokeWidth: 2))
+          : const Icon(Icons.download_rounded),
+      label: Text(_exporting ? 'Generating...' : 'Export Full Report'),
+      style: ElevatedButton.styleFrom(
+          backgroundColor: AppTheme.primary,
+          padding: const EdgeInsets.symmetric(vertical: 14)),
+    );
+    final csvButton = OutlinedButton.icon(
+      onPressed: _allTransactions.isEmpty ? null : _downloadCsv,
+      icon: const Icon(Icons.table_view_rounded),
+      label: const Text('Download for Excel (.csv)'),
+      style: OutlinedButton.styleFrom(
+          padding: const EdgeInsets.symmetric(vertical: 14)),
+    );
 
     return Scaffold(
       appBar: AppBar(
@@ -289,222 +347,75 @@ class _AdminReportsScreenState extends State<AdminReportsScreen> {
               const SizedBox(height: 12),
 
               // ── Summary Cards ──
-              Row(children: [
-                _ReportCard(
-                  label: 'Total\nBorrowings',
-                  value: '$_totalBorrowings',
-                  icon: Icons.trending_up_rounded,
-                  color: AppTheme.accent,
-                ),
-                const SizedBox(width: 12),
-                _ReportCard(
-                  label: 'On-Time\nReturns',
-                  value: '${_onTimeRate.toStringAsFixed(0)}%',
-                  icon: Icons.check_circle_outline_rounded,
-                  color: AppTheme.success,
-                ),
-              ]),
-              const SizedBox(height: 12),
-              Row(children: [
-                _ReportCard(
-                  label: 'Overdue\nItems',
-                  value: '$_totalOverdue',
-                  icon: Icons.warning_amber_rounded,
-                  color: AppTheme.danger,
-                ),
-                const SizedBox(width: 12),
-                _ReportCard(
-                  label: 'Damage\nReports',
-                  value: '$_totalDamage',
-                  icon: Icons.report_problem_outlined,
-                  color: AppTheme.warning,
-                ),
-              ]),
-              const SizedBox(height: 12),
-              Row(children: [
-                _ReportCard(
-                  label: 'Total\nEquipment',
-                  value: '$_totalEquipment',
-                  icon: Icons.science_rounded,
-                  color: AppTheme.primary,
-                ),
-                const SizedBox(width: 12),
-                _ReportCard(
-                  label: 'Returned\nSuccessfully',
-                  value: '$_totalReturned',
-                  icon: Icons.assignment_return_rounded,
-                  color: AppTheme.success,
-                ),
-              ]),
+              for (var i = 0; i < cards.length; i += cardsPerRow) ...[
+                if (i > 0) const SizedBox(height: 12),
+                Row(children: [
+                  for (var j = i; j < i + cardsPerRow; j++) ...[
+                    if (j > i) const SizedBox(width: 12),
+                    cards[j],
+                  ],
+                ]),
+              ],
               const SizedBox(height: 24),
 
-              // ── Most Borrowed ──
-              const SectionHeader(title: 'Most Borrowed Equipment'),
-              const SizedBox(height: 12),
-              if (_mostBorrowed.isEmpty)
-                Container(
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(14)),
-                  child: const Center(
-                    child: Text('No borrowing data yet.',
-                        style: TextStyle(color: AppTheme.textMid)),
-                  ),
-                )
-              else
-                ..._mostBorrowed.entries.map((e) {
-                  final ratio = maxCount > 0 ? e.value / maxCount : 0.0;
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 10),
-                    child: Container(
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(14)),
-                      child: Row(children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(e.key,
-                                  style: const TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 13,
-                                      color: AppTheme.textDark)),
-                              const SizedBox(height: 6),
-                              ClipRRect(
-                                borderRadius: BorderRadius.circular(4),
-                                child: LinearProgressIndicator(
-                                  value: ratio,
-                                  minHeight: 6,
-                                  backgroundColor: AppTheme.divider,
-                                  valueColor: const AlwaysStoppedAnimation(
-                                      AppTheme.accent),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(width: 16),
-                        Text('${e.value}x',
-                            style: const TextStyle(
-                                fontWeight: FontWeight.bold,
-                                color: AppTheme.accent)),
-                      ]),
+              // ── Most Borrowed and Recent Transactions ──
+              // Side by side on a full-size monitor.
+              if (width >= 1200)
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: _mostBorrowedSection()),
                     ),
-                  );
-                }),
+                    const SizedBox(width: 20),
+                    Expanded(
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: _recentSection()),
+                    ),
+                  ],
+                )
+              else ...[
+                ..._mostBorrowedSection(),
+                const SizedBox(height: 24),
+                ..._recentSection(),
+              ],
               const SizedBox(height: 24),
 
-              // ── Recent Transactions ──
-              const SectionHeader(title: 'Recent Transactions'),
-              const SizedBox(height: 12),
-              if (_allTransactions.isEmpty)
-                Container(
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(14)),
-                  child: const Center(
-                    child: Text('No transactions yet.',
-                        style: TextStyle(color: AppTheme.textMid)),
+              // ── Export Buttons ── (side by side on a wide window)
+              if (kIsWeb && width >= 900)
+                IntrinsicHeight(
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Expanded(child: exportButton),
+                      const SizedBox(width: 12),
+                      Expanded(child: csvButton),
+                    ],
                   ),
                 )
-              else
-                Container(
-                  decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(14)),
-                  child: Column(
-                    children: _allTransactions.take(8).map((tx) {
-                      final status   = tx['status'] ?? '';
-                      final student  = tx['borrower_name'] ??
-                          tx['student_number'] ?? '—';
-                      final equip    = tx['equipment_name'] ?? '—';
-                      final bDate    =
-                          '${tx['borrow_date'] ?? ''}'.split('T').first.split(' ').first;
-                      final sc = status == 'Approved' ? AppTheme.success
-                               : status == 'Pending'  ? AppTheme.accent
-                               : status == 'Returned' ? AppTheme.textMid
-                               : AppTheme.danger;
-                      return Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 14, vertical: 10),
-                        decoration: BoxDecoration(
-                          border: Border(
-                            bottom: BorderSide(color: AppTheme.divider),
-                          ),
-                        ),
-                        child: Row(children: [
-                          Container(
-                            width: 8, height: 8,
-                            decoration: BoxDecoration(
-                                color: sc, shape: BoxShape.circle),
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                            Text(student, style: const TextStyle(
-                                fontSize: 12, fontWeight: FontWeight.bold,
-                                color: AppTheme.textDark)),
-                            Text(equip, style: const TextStyle(
-                                fontSize: 11, color: AppTheme.textMid)),
-                          ])),
-                          Column(crossAxisAlignment: CrossAxisAlignment.end,
-                              children: [
-                            StatusBadge(label: status, color: sc),
-                            const SizedBox(height: 2),
-                            Text(bDate, style: const TextStyle(
-                                fontSize: 10, color: AppTheme.textLight)),
-                          ]),
-                        ]),
-                      );
-                    }).toList(),
-                  ),
-                ),
-              const SizedBox(height: 24),
-
-              // ── Export Button ──
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton.icon(
-                  onPressed: _exporting ? null : _exportReport,
-                  icon: _exporting
-                      ? const SizedBox(
-                          width: 16, height: 16,
-                          child: CircularProgressIndicator(
-                              color: Colors.white, strokeWidth: 2))
-                      : const Icon(Icons.download_rounded),
-                  label: Text(_exporting ? 'Generating...' : 'Export Full Report'),
-                  style: ElevatedButton.styleFrom(
-                      backgroundColor: AppTheme.primary,
-                      padding: const EdgeInsets.symmetric(vertical: 14)),
-                ),
-              ),
-              if (kIsWeb) ...[
-                const SizedBox(height: 10),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: _allTransactions.isEmpty ? null : _downloadCsv,
-                    icon: const Icon(Icons.table_view_rounded),
-                    label: const Text('Download for Excel (.csv)'),
-                    style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 14)),
-                  ),
-                ),
+              else ...[
+                SizedBox(width: double.infinity, child: exportButton),
+                if (kIsWeb) ...[
+                  const SizedBox(height: 10),
+                  SizedBox(width: double.infinity, child: csvButton),
+                ],
               ],
               const SizedBox(height: 8),
-              Text(
-                kIsWeb
-                    ? 'Export Full Report copies a summary to your clipboard. '
-                        'Download for Excel saves every request from the last '
-                        '$_reportPeriodDays days as a spreadsheet file.'
-                    : 'Report will be copied to your clipboard — paste it in Notes, Email, or Google Docs.',
-                textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 11, color: AppTheme.textMid),
+              // Full width, so it stays centred when it fits on one line.
+              SizedBox(
+                width: double.infinity,
+                child: Text(
+                  kIsWeb
+                      ? 'Export Full Report copies a summary to your clipboard. '
+                          'Download for Excel saves every request from the last '
+                          '$_reportPeriodDays days as a spreadsheet file.'
+                      : 'Report will be copied to your clipboard — paste it in Notes, Email, or Google Docs.',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 11, color: AppTheme.textMid),
+                ),
               ),
               const SizedBox(height: 20),
             ],
@@ -513,6 +424,141 @@ class _AdminReportsScreenState extends State<AdminReportsScreen> {
       ),
     );
   }
+
+  // ── Most Borrowed ──
+  List<Widget> _mostBorrowedSection() {
+    final maxCount = _mostBorrowed.values.isEmpty
+        ? 1
+        : _mostBorrowed.values.reduce((a, b) => a > b ? a : b);
+    return [
+      const SectionHeader(title: 'Most Borrowed Equipment'),
+      const SizedBox(height: 12),
+      if (_mostBorrowed.isEmpty)
+        Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(14)),
+          child: const Center(
+            child: Text('No borrowing data yet.',
+                style: TextStyle(color: AppTheme.textMid)),
+          ),
+        )
+      else
+        ..._mostBorrowed.entries.map((e) {
+          final ratio = maxCount > 0 ? e.value / maxCount : 0.0;
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(14)),
+              child: Row(children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(e.key,
+                          style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13,
+                              color: AppTheme.textDark)),
+                      const SizedBox(height: 6),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(4),
+                        child: LinearProgressIndicator(
+                          value: ratio,
+                          minHeight: 6,
+                          backgroundColor: AppTheme.divider,
+                          valueColor: const AlwaysStoppedAnimation(
+                              AppTheme.accent),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Text('${e.value}x',
+                    style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: AppTheme.accent)),
+              ]),
+            ),
+          );
+        }),
+    ];
+  }
+
+  // ── Recent Transactions ──
+  List<Widget> _recentSection() => [
+        const SectionHeader(title: 'Recent Transactions'),
+        const SizedBox(height: 12),
+        if (_allTransactions.isEmpty)
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(14)),
+            child: const Center(
+              child: Text('No transactions yet.',
+                  style: TextStyle(color: AppTheme.textMid)),
+            ),
+          )
+        else
+          Container(
+            decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(14)),
+            child: Column(
+              children: _allTransactions.take(8).map((tx) {
+                final status   = tx['status'] ?? '';
+                final student  = tx['borrower_name'] ??
+                    tx['student_number'] ?? '—';
+                final equip    = tx['equipment_name'] ?? '—';
+                final bDate    =
+                    '${tx['borrow_date'] ?? ''}'.split('T').first.split(' ').first;
+                final sc = status == 'Approved' ? AppTheme.success
+                         : status == 'Pending'  ? AppTheme.accent
+                         : status == 'Returned' ? AppTheme.textMid
+                         : AppTheme.danger;
+                return Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 14, vertical: 10),
+                  decoration: BoxDecoration(
+                    border: Border(
+                      bottom: BorderSide(color: AppTheme.divider),
+                    ),
+                  ),
+                  child: Row(children: [
+                    Container(
+                      width: 8, height: 8,
+                      decoration: BoxDecoration(
+                          color: sc, shape: BoxShape.circle),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                      Text(student, style: const TextStyle(
+                          fontSize: 12, fontWeight: FontWeight.bold,
+                          color: AppTheme.textDark)),
+                      Text(equip, style: const TextStyle(
+                          fontSize: 11, color: AppTheme.textMid)),
+                    ])),
+                    Column(crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                      StatusBadge(label: status, color: sc),
+                      const SizedBox(height: 2),
+                      Text(bDate, style: const TextStyle(
+                          fontSize: 10, color: AppTheme.textLight)),
+                    ]),
+                  ]),
+                );
+              }).toList(),
+            ),
+          ),
+      ];
 }
 
 class _ReportCard extends StatelessWidget {

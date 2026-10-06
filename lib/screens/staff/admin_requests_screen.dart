@@ -168,31 +168,39 @@ class _AdminRequestsScreenState extends State<AdminRequestsScreen> {
           padding: const EdgeInsets.all(32),
           child: Text(text, style: const TextStyle(color: AppTheme.textMid))));
 
+  // Both lists put their cards in rows on a wide window (gridRows).
   Widget _pendingList(List<dynamic> pending) {
     final requests = ApiService.groupRequests(pending);
-    return ListView(padding: const EdgeInsets.all(16), children: [
-      if (requests.isEmpty) _empty('No pending requests'),
-      for (final request in requests)
-        PendingRequestCard(
-          request: request,
-          onApprove: () => _decide(request, 'approve'),
-          onReject: () => _confirmReject(request),
-        ),
-    ]);
+    return LayoutBuilder(
+      builder: (context, box) => ListView(padding: const EdgeInsets.all(16), children: [
+        if (requests.isEmpty) _empty('No pending requests'),
+        ...gridRows([
+          for (final request in requests)
+            PendingRequestCard(
+              request: request,
+              onApprove: () => _decide(request, 'approve'),
+              onReject: () => _confirmReject(request),
+            ),
+        ], gridColumns(box.maxWidth - 32)),
+      ]),
+    );
   }
 
   Widget _recordList(List<dynamic> items, String emptyText, {String? footer}) {
-    return ListView(padding: const EdgeInsets.all(16), children: [
-      if (items.isEmpty) _empty(emptyText),
-      for (final e in items) _buildCard(e),
-      if (footer != null && items.isNotEmpty)
-        Padding(
-          padding: const EdgeInsets.only(top: 4, bottom: 8),
-          child: Center(
-              child: Text(footer,
-                  style: const TextStyle(fontSize: 11, color: AppTheme.textLight))),
-        ),
-    ]);
+    return LayoutBuilder(
+      builder: (context, box) => ListView(padding: const EdgeInsets.all(16), children: [
+        if (items.isEmpty) _empty(emptyText),
+        ...gridRows([for (final e in items) _buildCard(e)],
+            gridColumns(box.maxWidth - 32)),
+        if (footer != null && items.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 4, bottom: 8),
+            child: Center(
+                child: Text(footer,
+                    style: const TextStyle(fontSize: 11, color: AppTheme.textLight))),
+          ),
+      ]),
+    );
   }
 
   @override

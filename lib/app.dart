@@ -14,11 +14,10 @@ import 'screens/auth/splash_screen.dart';
 // ─── App Entry ───────────────────────────────────────────────────────────────
 // (The real main() lives in lib/main.dart — this library only exports the app.)
 
-// The web build is the staff portal (prof's comment 2026-10-05). Its screens
-// were made for a phone, so on a monitor the whole app sits in a centred frame
-// instead of stretching edge to edge.
-const double kWebMaxWidth = 1280;
-
+// The web build is the staff portal (prof's comment 2026-10-05). It fills the
+// browser window, and the staff screens lay themselves out for the width they
+// get. (It used to sit in a centred 1280 px frame, which left a wide monitor
+// with grey bars on both sides — the user, 2026-10-06.)
 class LabBorrowApp extends StatelessWidget {
   const LabBorrowApp({super.key});
 
@@ -29,17 +28,6 @@ class LabBorrowApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme,
       home: const SplashScreen(),
-      builder: kIsWeb
-          ? (context, child) => ColoredBox(
-                color: const Color(0xFFDDE3EF),
-                child: Center(
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: kWebMaxWidth),
-                    child: child,
-                  ),
-                ),
-              )
-          : null,
     );
   }
 }

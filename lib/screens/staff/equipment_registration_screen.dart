@@ -238,7 +238,7 @@ class _EquipmentRegistrationScreenState
         key: _formKey,
         child: SingleChildScrollView(
           controller: _scrollCtrl,
-          padding: const EdgeInsets.fromLTRB(20, 20, 20, 40),
+          padding: readablePadding(context, const EdgeInsets.fromLTRB(20, 20, 20, 40), maxWidth: 900),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [

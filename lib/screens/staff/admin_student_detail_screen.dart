@@ -140,7 +140,7 @@ class _AdminStudentDetailScreenState extends State<AdminStudentDetailScreen> {
     final name = '${_student['name'] ?? 'Student'}';
     return Scaffold(
       appBar: AppBar(title: const Text('Student')),
-      body: ListView(padding: const EdgeInsets.all(16), children: [
+      body: ListView(padding: readablePadding(context, const EdgeInsets.all(16), maxWidth: 900), children: [
         // Header
         Container(
           padding: const EdgeInsets.all(16),

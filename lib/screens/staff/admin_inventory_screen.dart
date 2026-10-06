@@ -233,6 +233,89 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
     if (res['success'] == true) _load();
   }
 
+  // One equipment card: a list row on a phone, one cell of a grid row on a
+  // wide window.
+  Widget _itemCard(Map<String, dynamic> e) {
+    final status = e['status'] ?? 'Available';
+    final condColor = _conditionColor(status);
+
+    return GestureDetector(
+      onTap: () => Navigator.push(context,
+          MaterialPageRoute(
+              builder: (_) => EquipmentDetailScreen(equipment: e))),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border(left: BorderSide(color: condColor, width: 4)),
+        ),
+        child: Row(
+          children: [
+            _thumb(e, condColor),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(e['equipment_name'] as String,
+                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppTheme.textDark)),
+                  const SizedBox(height: 2),
+                  Text('${e['qr_code']}  ·  ${e['category']}',
+                      style: const TextStyle(fontSize: 12, color: AppTheme.textMid)),
+                  if (ApiService.asDate(e['created_at']) case final added?) ...[
+                    const SizedBox(height: 2),
+                    Text('Added ${formatDate(added)}',
+                        style: const TextStyle(fontSize: 11, color: AppTheme.textLight)),
+                  ],
+                  const SizedBox(height: 8),
+                  Row(children: [
+                    // Stretched across a browser-wide card the
+                    // badge read as a progress bar, so the web
+                    // keeps it to its text.
+                    if (kIsWeb)
+                      Flexible(child: StatusBadge(label: status, color: condColor))
+                    else
+                      Expanded(child: StatusBadge(label: status, color: condColor)),
+                    const SizedBox(width: 12),
+                    StatusBadge(label: e['category'] as String, color: AppTheme.primary),
+                  ]),
+                ],
+              ),
+            ),
+            const SizedBox(width: 4),
+            if (Session.canManage)
+              PopupMenuButton<String>(
+                onSelected: (v) {
+                  if (v == 'edit') _openEdit(e);
+                  if (v == 'delete') _confirmDelete(e);
+                },
+                itemBuilder: (_) => const [
+                  PopupMenuItem(
+                    value: 'edit',
+                    child: Row(children: [
+                      Icon(Icons.edit_outlined, size: 18, color: AppTheme.textMid),
+                      SizedBox(width: 8),
+                      Text('Edit Details'),
+                    ]),
+                  ),
+                  PopupMenuItem(
+                    value: 'delete',
+                    child: Row(children: [
+                      Icon(Icons.delete_outline_rounded, size: 18, color: AppTheme.danger),
+                      SizedBox(width: 8),
+                      Text('Delete', style: TextStyle(color: AppTheme.danger)),
+                    ]),
+                  ),
+                ],
+                child: const Icon(Icons.more_vert_rounded, color: AppTheme.textLight),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) return const Center(child: CircularProgressIndicator());
@@ -280,6 +363,11 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
     // fills or the inventory runs out.
     if (filtered.length < _pageSize && _hasMore && !_loadingMore && !_loading) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _loadMore());
+    }
+    // Four cards a row on a wide window can leave a page too short to scroll,
+    // and then no scroll ever asks for the next one; check once laid out.
+    if (_hasMore && !_loadingMore && !_loading) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _onScroll());
     }
 
     return Scaffold(
@@ -355,98 +443,23 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
           ),
 
           // ── Equipment list ──
+          // Rows of cards on a wide window, one card per row on a phone.
           Expanded(
-            child: ListView.separated(
-                    controller: _scrollController,
-                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
-                    // One extra row for the paging footer.
-                    itemCount: filtered.length + 1,
-                    separatorBuilder: (_, _) => const SizedBox(height: 10),
-                    itemBuilder: (_, i) {
-                      if (i == filtered.length) {
-                        return _listFooter(filtered.isEmpty);
-                      }
-                      final e = filtered[i];
-                      final status = e['status'] ?? 'Available';
-                      final condColor = _conditionColor(status);
-
-                      return GestureDetector(
-                        onTap: () => Navigator.push(context,
-                            MaterialPageRoute(
-                                builder: (_) => EquipmentDetailScreen(equipment: e))),
-                        child: Container(
-                          padding: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(16),
-                            border: Border(left: BorderSide(color: condColor, width: 4)),
-                          ),
-                          child: Row(
-                            children: [
-                              _thumb(e, condColor),
-                              const SizedBox(width: 14),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(e['equipment_name'] as String,
-                                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppTheme.textDark)),
-                                    const SizedBox(height: 2),
-                                    Text('${e['qr_code']}  ·  ${e['category']}',
-                                        style: const TextStyle(fontSize: 12, color: AppTheme.textMid)),
-                                    if (ApiService.asDate(e['created_at']) case final added?) ...[
-                                      const SizedBox(height: 2),
-                                      Text('Added ${formatDate(added)}',
-                                          style: const TextStyle(fontSize: 11, color: AppTheme.textLight)),
-                                    ],
-                                    const SizedBox(height: 8),
-                                    Row(children: [
-                                      // Stretched across a browser-wide card the
-                                      // badge read as a progress bar, so the web
-                                      // keeps it to its text.
-                                      if (kIsWeb)
-                                        Flexible(child: StatusBadge(label: status, color: condColor))
-                                      else
-                                        Expanded(child: StatusBadge(label: status, color: condColor)),
-                                      const SizedBox(width: 12),
-                                      StatusBadge(label: e['category'] as String, color: AppTheme.primary),
-                                    ]),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(width: 4),
-                              if (Session.canManage)
-                                PopupMenuButton<String>(
-                                  onSelected: (v) {
-                                    if (v == 'edit') _openEdit(e);
-                                    if (v == 'delete') _confirmDelete(e);
-                                  },
-                                  itemBuilder: (_) => const [
-                                    PopupMenuItem(
-                                      value: 'edit',
-                                      child: Row(children: [
-                                        Icon(Icons.edit_outlined, size: 18, color: AppTheme.textMid),
-                                        SizedBox(width: 8),
-                                        Text('Edit Details'),
-                                      ]),
-                                    ),
-                                    PopupMenuItem(
-                                      value: 'delete',
-                                      child: Row(children: [
-                                        Icon(Icons.delete_outline_rounded, size: 18, color: AppTheme.danger),
-                                        SizedBox(width: 8),
-                                        Text('Delete', style: TextStyle(color: AppTheme.danger)),
-                                      ]),
-                                    ),
-                                  ],
-                                  child: const Icon(Icons.more_vert_rounded, color: AppTheme.textLight),
-                                ),
-                            ],
-                          ),
-                        ),
-                      );
-                    },
-                  ),
+            child: LayoutBuilder(builder: (context, box) {
+              final cols = gridColumns(box.maxWidth - 32, minWidth: 400);
+              final rows = (filtered.length + cols - 1) ~/ cols;
+              return ListView.separated(
+                controller: _scrollController,
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
+                // One extra row for the paging footer.
+                itemCount: rows + 1,
+                separatorBuilder: (_, _) => const SizedBox(height: 10),
+                itemBuilder: (_, i) {
+                  if (i == rows) return _listFooter(filtered.isEmpty);
+                  return gridRow(i, cols, filtered.length, (j) => _itemCard(filtered[j]));
+                },
+              );
+            }),
           ),
         ],
       ),

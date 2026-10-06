@@ -122,7 +122,7 @@ class _EquipmentDetailScreenState extends State<EquipmentDetailScreen> {
 
           SliverToBoxAdapter(
             child: Padding(
-              padding: const EdgeInsets.all(20),
+              padding: readablePadding(context, const EdgeInsets.all(20), maxWidth: 900),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
