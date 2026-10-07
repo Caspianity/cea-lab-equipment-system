@@ -13,20 +13,28 @@
 // loan still out as the Dashboard does (not only those sent in the last 90
 // days), a message instead of zeros when loading fails, and Most Borrowed by
 // item type (ApiService.reportMetrics).
+//
+// 2026-10-07, later: "Export Full Report" opens the report as a readable page
+// (full_report_screen.dart) instead of a green-on-black, terminal-style text
+// dialog, which the lab staff found confusing. Copy Report is on that page,
+// and (later still) "Change dates" for any period and, on the web portal,
+// Download Excel and Download PDF to print. Every form comes from one
+// FullReport, so this page's Excel button saves the same workbook for its
+// 90 days.
 // -----------------------------------------------------------------------------
 
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../../services/api_service.dart';
 import '../../services/file_download.dart';
-import '../../services/report_summary.dart';
+import '../../services/full_report.dart';
 import '../../services/report_xlsx.dart';
 import '../../services/session.dart';
 import '../../theme.dart';
 import '../../widgets/common.dart';
+import 'full_report_screen.dart';
 
 // ─── Admin Reports Screen ──────────────────────────────────────────────────────
 
@@ -39,7 +47,6 @@ class AdminReportsScreen extends StatefulWidget {
 class _AdminReportsScreenState extends State<AdminReportsScreen> {
   bool _loading = true;
   bool _failed = false;
-  bool _exporting = false;
 
   // Reporting window. Borrowing figures below cover this many days back, not
   // all time — see the note in _load(). Surfaced in the UI and the exported
@@ -59,9 +66,6 @@ class _AdminReportsScreenState extends State<AdminReportsScreen> {
 
   // Recent transactions for export
   List<dynamic> _allTransactions = [];
-
-  // The same period worked out for the Excel report's Summary sheet.
-  ReportSummary? _summary;
 
   @override
   void initState() {
@@ -85,12 +89,10 @@ class _AdminReportsScreenState extends State<AdminReportsScreen> {
       final openF   = ApiService.getOpenRequests();
       final eqF     = ApiService.getEquipmentStatusCounts();
       final damageF = ApiService.damageReportCount();
-      final openDamageF = ApiService.openDamageReportCount();
       final txSnap        = await txF;
       final open          = await openF;
       final equipment     = await eqF;
       final damageReports = await damageF;
-      final openDamage    = await openDamageF;
 
       // Borrowing stats. The counting rules live in ApiService.reportMetrics so
       // they are unit-tested rather than done by hand here — the hand-rolled
@@ -110,9 +112,6 @@ class _AdminReportsScreenState extends State<AdminReportsScreen> {
         _onTimeRate       = m['onTimeRate'] as double;
         _mostBorrowed     = m['mostBorrowed'] as Map<String, int>;
         _allTransactions  = txSnap;
-        _summary = ReportSummary.of(txSnap,
-            days: _reportPeriodDays, now: now, open: open,
-            openDamage: openDamage, equipment: equipment);
         _loading          = false;
       });
     } catch (e) {
@@ -125,153 +124,74 @@ class _AdminReportsScreenState extends State<AdminReportsScreen> {
     }
   }
 
-  // ── Generate and share a text report ──────────────────────────────────────
-  Future<void> _exportReport() async {
-    setState(() => _exporting = true);
-
-    try {
-      final now = DateTime.now();
-      final dateStr =
-          '${now.year}-${now.month.toString().padLeft(2,'0')}-${now.day.toString().padLeft(2,'0')}';
-      final timeStr =
-          '${now.hour.toString().padLeft(2,'0')}:${now.minute.toString().padLeft(2,'0')}';
-
-      // Build report text
-      final buf = StringBuffer();
-      buf.writeln('==============================================');
-      buf.writeln('  LABTRACK — CEA LABORATORY REPORT');
-      buf.writeln('  New Era University');
-      buf.writeln('  Generated: $dateStr at $timeStr');
-      buf.writeln('==============================================');
-      buf.writeln('');
-      buf.writeln('SUMMARY  (last $_reportPeriodDays days)');
-      buf.writeln('----------------------------------------------');
-      buf.writeln('Borrowing figures below cover the last '
-          '$_reportPeriodDays days. Equipment and damage report');
-      buf.writeln('totals are current counts.');
-      buf.writeln('');
-      buf.writeln('Total Borrowings   : $_totalBorrowings');
-      buf.writeln('Total Returned     : $_totalReturned');
-      buf.writeln('Total Overdue      : $_totalOverdue');
-      buf.writeln('Damage Reports     : $_totalDamage');
-      buf.writeln('Total Equipment    : $_totalEquipment');
-      buf.writeln('On-Time Return Rate: ${_onTimeRate.toStringAsFixed(1)}%');
-      buf.writeln('');
-      buf.writeln('MOST BORROWED EQUIPMENT');
-      buf.writeln('----------------------------------------------');
-      int rank = 1;
-      _mostBorrowed.forEach((name, cnt) {
-        buf.writeln('$rank. $name — ${cnt}x borrowed');
-        rank++;
-      });
-
-      if (_allTransactions.isNotEmpty) {
-        buf.writeln('');
-        buf.writeln('TRANSACTION LOG');
-        buf.writeln('----------------------------------------------');
-        for (final tx in _allTransactions) {
-          final status  = tx['status'] ?? '';
-          final student = tx['borrower_name'] ?? tx['student_number'] ?? '—';
-          final equip   = tx['equipment_name'] ?? '—';
-          final bDate   = '${tx['borrow_date'] ?? ''}'.split('T').first;
-          buf.writeln('[$status] $student | $equip | $bDate');
-        }
-      }
-
-      buf.writeln('');
-      buf.writeln('==============================================');
-      buf.writeln('  END OF REPORT — LabTrack v1.0');
-      buf.writeln('==============================================');
-
-      final reportText = buf.toString();
-
-      // Show report in a dialog with copy option
-      if (!mounted) return;
-      showDialog(
-        context: context,
-        builder: (_) => AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: Row(children: const [
-            Icon(Icons.assessment_rounded, color: AppTheme.primary),
-            SizedBox(width: 10),
-            Text('Full Report'),
-          ]),
-          content: SizedBox(
-            width: double.maxFinite,
-            height: 400,
-            child: Column(
-              children: [
-                Expanded(
-                  child: Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF1E1E1E),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: SingleChildScrollView(
-                      child: Text(
-                        reportText,
-                        style: const TextStyle(
-                          fontFamily: 'Courier New',
-                          fontSize: 11,
-                          color: Color(0xFF00FF88),
-                          height: 1.5,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                const Text(
-                  'Tap "Copy" to copy the report to your clipboard.',
-                  style: TextStyle(fontSize: 12, color: AppTheme.textMid),
-                  textAlign: TextAlign.center,
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Close', style: TextStyle(color: AppTheme.textMid)),
-            ),
-            ElevatedButton.icon(
-              onPressed: () {
-                // Copy to clipboard
-                // ignore: deprecated_member_use
-                Clipboard.setData(ClipboardData(text: reportText));
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('✅ Report copied to clipboard! Paste it in Notes or Email.'),
-                    backgroundColor: AppTheme.success,
-                    behavior: SnackBarBehavior.floating,
-                  ),
-                );
-              },
-              icon: const Icon(Icons.copy_rounded),
-              label: const Text('Copy Report'),
-            ),
-          ],
-        ),
+  // ── The full report, as a page anyone can read ───────────────────────────
+  // 2026-10-07: it used to be a terminal-style text dialog (green on black,
+  // "=====" lines, "[Approved] name | item | date"). The page and the text
+  // Copy Report gives are in full_report_screen.dart and full_report.dart.
+  // This page's 90 days as a report: what Export Full Report opens and what
+  // Download Excel Report saves.
+  FullReport _fullReport() => FullReport(
+        madeAt:          DateTime.now(),
+        madeBy:          Session.name,
+        days:            _reportPeriodDays,
+        totalBorrowings: _totalBorrowings,
+        totalReturned:   _totalReturned,
+        totalOverdue:    _totalOverdue,
+        totalDamage:     _totalDamage,
+        totalEquipment:  _totalEquipment,
+        onTimeRate:      _onTimeRate,
+        mostBorrowed:    _mostBorrowed,
+        requests:        _allTransactions,
       );
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Export failed: $e'), backgroundColor: AppTheme.danger));
-    } finally {
-      if (mounted) setState(() => _exporting = false);
-    }
+
+  // The report for dates staff chose on the Full Report page ("Change dates",
+  // 2026-10-07). Worked out like this page's 90 days; overdue items,
+  // equipment and damage reports are counted as of today, as here.
+  Future<FullReport> _reportFor(DateTime start, DateTime end) async {
+    final now   = DateTime.now();
+    final from  = DateTime(start.year, start.month, start.day);
+    final until = DateTime(end.year, end.month, end.day).add(const Duration(days: 1));
+    final txF     = ApiService.getRequestsBetween(from, until);
+    final openF   = ApiService.getOpenRequests();
+    final eqF     = ApiService.getEquipmentStatusCounts();
+    final damageF = ApiService.damageReportCount();
+    final txns      = await txF;
+    final open      = await openF;
+    final equipment = await eqF;
+    final damage    = await damageF;
+    final m = ApiService.reportMetrics(txns, now: now);
+    return FullReport(
+      madeAt:          now,
+      madeBy:          Session.name,
+      start:           from,
+      end:             DateTime(end.year, end.month, end.day),
+      totalBorrowings: m['borrowings'] as int,
+      totalReturned:   m['returned'] as int,
+      totalOverdue:    ApiService.overdueLoans(open, now: now).length,
+      totalDamage:     damage,
+      totalEquipment:  equipment['Total'] ?? 0,
+      onTimeRate:      m['onTimeRate'] as double,
+      mostBorrowed:    m['mostBorrowed'] as Map<String, int>,
+      requests:        txns,
+    );
+  }
+
+  void _exportReport() {
+    Navigator.push(
+        context,
+        MaterialPageRoute(
+            builder: (_) =>
+                FullReportScreen(report: _fullReport(), loadPeriod: _reportFor)));
   }
 
   // ── Web portal: the period as an Excel workbook ───────────────────────────
-  // 2026-10-07: replaces the .csv. Two sheets: Summary (the figures, each
-  // explained) and Borrowing records (one row per item asked for, with plain
-  // statuses such as "Returned late"); see report_xlsx.dart.
+  // 2026-10-07: replaces the .csv. The same workbook as the Full Report's
+  // Download Excel, for this page's 90 days: Report (as the PDF), Requests,
+  // Borrowing records; see report_xlsx.dart.
   void _downloadXlsx() {
-    final s = _summary;
-    if (s == null) return;
-    final bytes = ReportXlsx.build(s, _allTransactions, generatedBy: Session.name);
-    final ok = downloadBytes(ReportXlsx.fileName(s), bytes,
+    final report = _fullReport();
+    final bytes = ReportXlsx.build(report);
+    final ok = downloadBytes(ReportXlsx.fileName(report), bytes,
         mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(ok
@@ -354,20 +274,15 @@ class _AdminReportsScreenState extends State<AdminReportsScreen> {
       ),
     ];
     final exportButton = ElevatedButton.icon(
-      onPressed: _exporting ? null : _exportReport,
-      icon: _exporting
-          ? const SizedBox(
-              width: 16, height: 16,
-              child: CircularProgressIndicator(
-                  color: Colors.white, strokeWidth: 2))
-          : const Icon(Icons.download_rounded),
-      label: Text(_exporting ? 'Generating...' : 'Export Full Report'),
+      onPressed: _exportReport,
+      icon: const Icon(Icons.download_rounded),
+      label: const Text('Export Full Report'),
       style: ElevatedButton.styleFrom(
           backgroundColor: AppTheme.primary,
           padding: const EdgeInsets.symmetric(vertical: 14)),
     );
     final xlsxButton = OutlinedButton.icon(
-      onPressed: _summary == null ? null : _downloadXlsx,
+      onPressed: _downloadXlsx,
       icon: const Icon(Icons.table_view_rounded),
       label: const Text('Download Excel Report (.xlsx)'),
       style: OutlinedButton.styleFrom(
@@ -466,11 +381,13 @@ class _AdminReportsScreenState extends State<AdminReportsScreen> {
                 width: double.infinity,
                 child: Text(
                   kIsWeb
-                      ? 'Export Full Report copies a summary to your clipboard. '
-                          'Download Excel Report saves the last $_reportPeriodDays '
-                          'days as an Excel workbook: a Summary sheet and one row '
-                          'per item asked for.'
-                      : 'Report will be copied to your clipboard — paste it in Notes, Email, or Google Docs.',
+                      ? 'Export Full Report shows the whole report on one page: '
+                          'choose its dates there, copy it, or download it as an '
+                          'Excel workbook or as a PDF to print. Download Excel '
+                          'Report saves the last $_reportPeriodDays days.'
+                      : 'Export Full Report shows the whole report on one page; '
+                          'you can choose its dates there. Copy Report puts it on '
+                          'your clipboard for Notes, Email, or Google Docs.',
                   textAlign: TextAlign.center,
                   style: const TextStyle(fontSize: 11, color: AppTheme.textMid),
                 ),
@@ -577,12 +494,9 @@ class _AdminReportsScreenState extends State<AdminReportsScreen> {
                 final equip    = tx['equipment_name'] ?? '—';
                 final bDate    =
                     '${tx['borrow_date'] ?? ''}'.split('T').first.split(' ').first;
-                // Cancelled (new in 1.0.17) is grey, as on Requests.
-                final sc = status == 'Approved'  ? AppTheme.success
-                         : status == 'Pending'   ? AppTheme.accent
-                         : status == 'Returned'  ? AppTheme.textMid
-                         : status == 'Cancelled' ? AppTheme.textLight
-                         : AppTheme.danger;
+                // The same colours as the full report (Cancelled, new in
+                // 1.0.17, is grey, as on Requests).
+                final sc = reportStatusColor('$status');
                 return Container(
                   padding: const EdgeInsets.symmetric(
                       horizontal: 14, vertical: 10),

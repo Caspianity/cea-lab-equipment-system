@@ -2,6 +2,8 @@
 // network needed, so these run in plain `flutter test`.
 
 import 'dart:convert';
+import 'dart:io' as io;
+import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
 import 'package:cloud_firestore/cloud_firestore.dart' show Timestamp;
@@ -11,8 +13,9 @@ import 'package:flutter_test/flutter_test.dart';
 // business logic no longer pulls in the UI module at all.
 import 'package:cea_lab_app/constants.dart';
 import 'package:cea_lab_app/services/api_service.dart';
+import 'package:cea_lab_app/services/full_report.dart';
+import 'package:cea_lab_app/services/full_report_pdf.dart';
 import 'package:cea_lab_app/services/qr_labels.dart';
-import 'package:cea_lab_app/services/report_summary.dart';
 import 'package:cea_lab_app/services/report_xlsx.dart';
 import 'package:cea_lab_app/services/session.dart';
 import 'package:cea_lab_app/services/xlsx.dart';
@@ -892,82 +895,6 @@ void main() {
     });
   });
 
-  group('Report summary', () {
-    final now = DateTime(2026, 10, 6, 18, 0);
-    Map<String, dynamic> rec(String sid, String at, String name, String status,
-            {Map<String, dynamic> extra = const {}}) =>
-        {'student_id': sid, 'borrow_date': at, 'equipment_name': name,
-          'status': status, 'due_date': '2026-10-06T17:00:00', ...extra};
-    final txns = [
-      // s1: two beakers, both back, one late
-      rec('s1', '2026-10-06T08:00:00', 'Beaker 1000 mL #1', 'Returned',
-          extra: {'return_date': Timestamp.fromDate(DateTime(2026, 10, 6, 16, 0))}),
-      rec('s1', '2026-10-06T08:00:00', 'Beaker 1000 mL #2', 'Returned',
-          extra: {'return_date': Timestamp.fromDate(DateTime(2026, 10, 6, 17, 30))}),
-      // s2: one flask still out past its time
-      rec('s2', '2026-10-06T09:00:00', 'Flask 500 mL #1', 'Approved'),
-      // s3: approved, waiting at the lab
-      rec('s3', '2026-10-06T10:00:00', 'Beaker 1000 mL #3', 'Approved',
-          extra: {'awaiting_pickup': true}),
-      // s4: never collected; s5: cancelled; s6: rejected; s7: waiting
-      rec('s4', '2026-10-05T10:00:00', 'Mallet #1', 'Cancelled',
-          extra: {'cancel_reason': 'Not picked up', 'cancelled_by_name': 'Staff'}),
-      rec('s5', '2026-10-05T11:00:00', 'Mallet #2', 'Cancelled'),
-      rec('s6', '2026-10-05T12:00:00', 'Mallet #3', 'Rejected'),
-      rec('s7', '2026-10-06T17:50:00', 'Mallet #4', 'Pending'),
-    ];
-    final s = ReportSummary.of(txns, days: 30, now: now, openDamage: 1,
-        equipment: const {'Available': 80, 'Reserved': 1, 'Total': 90});
-
-    test('counts requests, hand-overs, returns and the rest', () {
-      expect(s.requests, 7);
-      expect(s.itemsAsked, 8);
-      expect(s.borrowed, 3); // two returned, one out; the waiting one is not
-      expect(s.returned, 2);
-      expect(s.onTime, 1);
-      expect(s.late, 1);
-      expect(s.onTimeRate, 0.5);
-      expect(s.overdueNow, 1);
-      expect(s.readyRequests, 1);
-      expect(s.waitingRequests, 1);
-      expect(s.notPickedUp, 1);
-      expect(s.cancelledByStudents, 1);
-      expect(s.rejected, 1);
-      expect(s.mostBorrowed, {'Beaker 1000 mL': 2, 'Flask 500 mL': 1});
-    });
-
-    test('At a glance says it in sentences', () {
-      expect(s.glance, [
-        'Students sent 7 requests for 8 items, and 3 items were handed over to them.',
-        '2 items came back: 1 on time and 1 late (50% on time).',
-        '1 item is overdue right now. Penalties & Holds lists who has them.',
-        '1 approved request is waiting at the lab to be picked up.',
-        '1 request is waiting for approval.',
-        'Not borrowed after all: 1 not picked up, 1 cancelled by students, 1 rejected (requests).',
-        '1 damage report is still open.',
-      ]);
-    });
-
-    // Found on the live data: an overdue loan sent before the period read as
-    // "Nothing is overdue" while the Dashboard counted it.
-    test('"right now" figures come from every open request, not just the period', () {
-      final old = rec('s9', '2026-08-26T09:00:00', 'Keyboard', 'Approved',
-          extra: {'due_date': '2026-08-26T17:00:00'});
-      final withOpen = ReportSummary.of(txns, days: 30, now: now,
-          open: [...txns.where((t) => t['status'] == 'Pending' || t['status'] == 'Approved'), old]);
-      expect(withOpen.overdueNow, 2);
-      expect(withOpen.readyRequests, 1);
-      expect(withOpen.waitingRequests, 1);
-      expect(withOpen.borrowed, 3); // period figures unchanged
-    });
-
-    test('an empty period says so instead of a row of zeros', () {
-      final empty = ReportSummary.of(const [], days: 7, now: now);
-      expect(empty.glance.first, 'No requests were sent in the last 7 days.');
-      expect(empty.onTimeRate, 0);
-    });
-  });
-
   group('Excel workbook', () {
     test('columns are lettered like Excel', () {
       expect([0, 25, 26, 51, 52].map(Xlsx.column), ['A', 'Z', 'AA', 'AZ', 'BA']);
@@ -989,34 +916,169 @@ void main() {
       expect(xml, isNot(contains('<f>')));
     });
 
-    test('the report has a Summary sheet and a records sheet with plain statuses', () {
+    // 2026-10-07: the workbook holds the same report as the Full Report page
+    // and its PDF (the user: "make the excel report detailed the same").
+    test('the report sheet, a requests sheet and the detailed records sheet', () {
       final now = DateTime(2026, 10, 6, 18, 0);
       final txns = [
         {
           'student_id': 's1', 'borrow_date': '2026-10-06T08:00:00',
-          'borrower_name': 'Dela Peña, Ana', 'equipment_name': 'Beaker 1000 mL #1',
-          'qr_code': 'GLS-000001', 'status': 'Returned', 'due_date': '2026-10-06T17:00:00',
+          'borrower_name': 'Dela Peña, Ana', 'student_number': '26-00001-001',
+          'equipment_name': 'Beaker 1000 mL #1', 'qr_code': 'GLS-000001',
+          'status': 'Returned', 'due_date': '2026-10-06T17:00:00',
           'return_date': Timestamp.fromDate(DateTime(2026, 10, 6, 17, 30)),
         },
+        {
+          'student_id': 's1', 'borrow_date': '2026-10-06T08:00:00',
+          'borrower_name': 'Dela Peña, Ana', 'student_number': '26-00001-001',
+          'equipment_name': 'Beaker 1000 mL #2', 'qr_code': 'GLS-000002',
+          'status': 'Returned', 'due_date': '2026-10-06T17:00:00',
+          'return_date': Timestamp.fromDate(DateTime(2026, 10, 6, 16, 0)),
+        },
       ];
-      final s = ReportSummary.of(txns, days: 30, now: now);
-      final bytes = ReportXlsx.build(s, txns, generatedBy: 'Lab Staff', now: now);
-      final zip = ZipDecoder().decodeBytes(bytes);
+      final report = FullReport(
+        madeAt: now, madeBy: 'Lab Staff', days: 30,
+        totalBorrowings: 2, totalReturned: 2, totalOverdue: 0, totalDamage: 1,
+        totalEquipment: 90, onTimeRate: 50,
+        mostBorrowed: const {'Beaker 1000 mL': 2}, requests: txns,
+      );
+      final zip = ZipDecoder().decodeBytes(ReportXlsx.build(report));
       String part(String name) => utf8.decode(zip.findFile(name)!.content);
 
       expect(zip.findFile('[Content_Types].xml'), isNotNull);
-      expect(part('xl/workbook.xml'), contains('<sheet name="Summary"'));
-      expect(part('xl/workbook.xml'), contains('<sheet name="Borrowing records"'));
-      final records = part('xl/worksheets/sheet2.xml');
+      final book = part('xl/workbook.xml');
+      expect(book.indexOf('<sheet name="Report"'), lessThan(book.indexOf('<sheet name="Requests"')));
+      expect(book, contains('<sheet name="Borrowing records"'));
+
+      // The Report sheet: what the PDF's first page says.
+      final first = part('xl/worksheets/sheet1.xml');
+      for (final shown in ['CEA Laboratory Report', 'Last 30 days: Sep 6, 2026 to Oct 6, 2026',
+          'by Lab Staff', 'Total Borrowings', 'On-Time Returns', 'Overdue Items',
+          'Damage Reports', 'Total Equipment', 'Returned Successfully',
+          'Most Borrowed Equipment', 'Beaker 1000 mL', '1 request for 2 items',
+          FullReport.note]) {
+        expect(first, contains(shown), reason: shown);
+      }
+      expect(first, contains('<v>0.5</v>')); // On-Time Returns as a percentage
+
+      // Requests: one row per request, as the PDF lists them.
+      final requests = part('xl/worksheets/sheet2.xml');
+      for (final c in ReportXlsx.requestColumns) {
+        expect(requests, contains('>$c<'));
+      }
+      expect(requests, contains('Beaker 1000 mL × 2'));
+      expect(requests, contains('26-00001-001'));
+      expect(requests, contains('<autoFilter ref="A1:F2"/>'));
+
+      // Borrowing records: every item, the stored status and its result.
+      final records = part('xl/worksheets/sheet3.xml');
       for (final c in ReportXlsx.recordColumns) {
         expect(records, contains('>$c<'));
       }
       expect(records, contains('Returned late'));
+      expect(records, contains('Returned on time'));
       expect(records, contains('Dela Peña, Ana'));
       expect(records, contains('state="frozen"'));
-      expect(records, contains('<autoFilter ref="A1:P2"/>'));
-      expect(part('xl/worksheets/sheet1.xml'), contains('What it means'));
-      expect(ReportXlsx.fileName(s), 'labtrack-report-2026-10-06-last-30-days.xlsx');
+      expect(records, contains('<autoFilter ref="A1:Q3"/>'));
+      expect(ReportXlsx.fileName(report), 'labtrack-report-2026-10-06-last-30-days.xlsx');
+    });
+  });
+
+  // 2026-10-07: the Full Report as a PDF to print, same content as the page.
+  group('Full report PDF', () {
+    FullReport report(int requests) => FullReport(
+          madeAt: DateTime(2026, 10, 7, 15, 0),
+          madeBy: 'Ramoel Bello',
+          start: DateTime(2026, 8, 1),
+          end: DateTime(2026, 10, 7),
+          totalBorrowings: requests, totalReturned: requests, totalOverdue: 0,
+          totalDamage: 0, totalEquipment: 90, onTimeRate: 100,
+          mostBorrowed: const {'Beaker 1000 mL': 3},
+          requests: [
+            for (var i = 0; i < requests; i++)
+              {'student_id': 's$i',
+               'borrow_date': DateTime(2026, 10, 7, 9).subtract(Duration(hours: i)).toIso8601String(),
+               'borrower_name': 'Student — $i', 'equipment_name': 'Flask 500 mL #$i',
+               'status': 'Returned'},
+          ],
+        );
+
+    test('is a PDF named after its dates', () async {
+      final bytes = await FullReportPdf.build(report(3));
+      expect(String.fromCharCodes(bytes.take(5)), '%PDF-');
+      expect(FullReportPdf.fileName(report(3)), 'labtrack-report-2026-08-01-to-2026-10-07.pdf');
+    });
+
+    test('a long list of requests continues on more pages', () async {
+      String pages(Uint8List b) => RegExp(r'/Count (\d+)').firstMatch(latin1.decode(b))!.group(1)!;
+      expect(pages(await FullReportPdf.build(report(3))), '1');
+      expect(int.parse(pages(await FullReportPdf.build(report(120)))), greaterThan(2));
+    });
+
+    // The words on each page, in the order the PDF draws them (the footer
+    // first). Each page is drawn by one compressed stream.
+    List<String> pageTexts(Uint8List pdf) {
+      final s = latin1.decode(pdf);
+      final pages = <String>[];
+      for (final m in RegExp(r'(?<!end)stream\r?\n').allMatches(s)) {
+        final String drawn;
+        try {
+          drawn = latin1.decode(io.zlib.decode(pdf.sublist(m.end, s.indexOf('endstream', m.end))));
+        } on FormatException {
+          continue;
+        }
+        if (!drawn.contains(')]TJ')) continue;
+        pages.add(RegExp(r'\[\((.*?)\)\]TJ').allMatches(drawn).map((w) => w[1]).join(' '));
+      }
+      return pages;
+    }
+
+    // [perDay] requests on each day, from Oct 6 back, every one at 8 PM or
+    // a little before.
+    FullReport days(List<int> perDay) => FullReport(
+          madeAt: DateTime(2026, 10, 7, 15, 0),
+          madeBy: 'Ramoel Bello',
+          start: DateTime(2026, 8, 1),
+          end: DateTime(2026, 10, 7),
+          totalBorrowings: 1, totalReturned: 1, totalOverdue: 0,
+          totalDamage: 0, totalEquipment: 90, onTimeRate: 100,
+          mostBorrowed: const {'Beaker 1000 mL': 3},
+          requests: [
+            for (final (d, n) in perDay.indexed)
+              for (var i = 0; i < n; i++)
+                {'student_id': 's$d-$i',
+                 'borrow_date': DateTime(2026, 10, 6 - d, 20)
+                     .subtract(Duration(minutes: i)).toIso8601String(),
+                 'borrower_name': 'Student $i', 'equipment_name': 'Flask 500 mL #$i',
+                 'status': 'Returned'},
+          ],
+        );
+
+    // Printed report, 2026-10-07: the rows at the top of a page did not say
+    // which day they were from.
+    test("a day's name repeats at the top of every page it runs onto", () async {
+      final pages = pageTexts(await FullReportPdf.build(days([80])));
+      expect(pages.length, greaterThan(2));
+      for (final (i, p) in pages.indexed) {
+        expect(p, contains('Yesterday, Oct 6, 2026 Time Student Items Status'),
+            reason: 'page ${i + 1}');
+      }
+    });
+
+    // Printed report, 2026-10-07: "Aug 4, 2026" and the column titles sat at
+    // the foot of page 2, and that day's one request was on page 3.
+    test("a day's name is never left at the foot of a page without a request", () async {
+      final request = RegExp(r'[78]:\d\d PM');
+      for (var first = 1; first <= 60; first++) {
+        final pages = pageTexts(await FullReportPdf.build(days([first, 3])));
+        for (final (i, p) in pages.indexed) {
+          final a = p.lastIndexOf('Yesterday, Oct 6, 2026'), b = p.lastIndexOf('Oct 5, 2026');
+          final name = a > b ? a : b;
+          if (name < 0) continue;
+          expect(request.hasMatch(p.substring(name)), isTrue,
+              reason: 'page ${i + 1} of ${pages.length}, $first requests on the first day');
+        }
+      }
     });
   });
 
@@ -1048,6 +1110,140 @@ void main() {
       ];
       expect(QrLabels.withCode(items).map((e) => e['equipment_name']),
           ['Beaker 1000 mL #1']);
+    });
+  });
+
+  // 2026-10-07: Export Full Report looked like a computer terminal; the lab
+  // staff found it hard to read.
+  group('Full report', () {
+    final report = FullReport(
+      madeAt: DateTime(2026, 10, 7, 14, 5),
+      madeBy: 'Ramoel Bello',
+      days: 90,
+      totalBorrowings: 28,
+      totalReturned: 27,
+      totalOverdue: 1,
+      totalDamage: 4,
+      totalEquipment: 90,
+      onTimeRate: 92.6,
+      mostBorrowed: const {'Beaker 1000 mL': 13, 'Flask 500 mL': 1},
+      // Newest first, one record per item, as the Reports tab loads them.
+      requests: const [
+        // one request, one item
+        {'student_id': 's1', 'borrow_date': '2026-10-07T09:05:00.000',
+         'borrower_name': 'ce demo', 'equipment_name': 'Beaker 1000 mL #1',
+         'status': 'Returned'},
+        // one request, three items: two came back, one was refused
+        {'student_id': 's2', 'borrow_date': '2026-10-07T08:30:00.000',
+         'borrower_name': 'IE Demo', 'equipment_name': 'Beaker 1000 mL #2',
+         'status': 'Returned'},
+        {'student_id': 's2', 'borrow_date': '2026-10-07T08:30:00.000',
+         'borrower_name': 'IE Demo', 'equipment_name': 'Beaker 1000 mL #3',
+         'status': 'Returned'},
+        {'student_id': 's2', 'borrow_date': '2026-10-07T08:30:00.000',
+         'borrower_name': 'IE Demo', 'equipment_name': 'Flask 500 mL #1',
+         'status': 'Rejected'},
+        // the day before, by student number only
+        {'student_id': 's1', 'borrow_date': '2026-10-06T11:56:00.000',
+         'student_number': '26-12345-222', 'equipment_name': 'Current Meter',
+         'status': 'Cancelled'},
+        // two weeks before
+        {'student_id': 's3', 'borrow_date': '2026-09-23T13:00:00.000',
+         'borrower_name': 'ME Demo', 'equipment_name': 'Keyboard', 'status': 'Approved'},
+      ],
+    );
+
+    test('says when it was made and what it covers, in words', () {
+      expect(report.madeLine, 'Made on Oct 7, 2026 at 2:05 PM by Ramoel Bello');
+      expect(report.periodLine, 'Covers the last 90 days: Jul 9, 2026 to Oct 7, 2026');
+      expect(FullReport.when(DateTime(2026, 1, 2, 0, 30)), 'Jan 2, 2026 at 12:30 AM');
+      expect(FullReport.when(DateTime(2026, 1, 2, 12, 0)), 'Jan 2, 2026 at 12:00 PM');
+    });
+
+    test('uses the Reports card names, in their order', () {
+      expect(report.figures, [
+        ('Total Borrowings', '28'),
+        ('On-Time Returns', '93%'),
+        ('Overdue Items', '1'),
+        ('Damage Reports', '4'),
+        ('Total Equipment', '90'),
+        ('Returned Successfully', '27'),
+      ]);
+    });
+
+    // "Too many" (the user): one line per request, not per item, by day.
+    test('lists one line per request, under a heading per day', () {
+      final days = report.requestDays;
+      expect([for (final d in days) d.label],
+          ['Today, Oct 7, 2026', 'Yesterday, Oct 6, 2026', 'Sep 23, 2026']);
+      expect([for (final l in days[0].lines) (l.time, l.student, l.items, l.status, l.count)], [
+        ('9:05 AM', 'ce demo', 'Beaker 1000 mL #1', 'Returned', 1),
+        // a request whose items ended differently: one line per status
+        ('8:30 AM', 'IE Demo', 'Beaker 1000 mL × 2', 'Returned', 2),
+        ('8:30 AM', 'IE Demo', 'Flask 500 mL #1', 'Rejected', 1),
+      ]);
+      expect(days[0].lines.first.sent, DateTime(2026, 10, 7, 9, 5));
+      expect(days[1].lines.single.student, '26-12345-222');
+      expect(days[1].lines.single.number, '26-12345-222');
+      expect(days[2].lines.single.time, '1:00 PM');
+    });
+
+    // 2026-10-07: "Change dates" on the Full Report.
+    test('a chosen period reads as its dates and names its files', () {
+      FullReport chosen(DateTime a, DateTime b) => FullReport(
+          madeAt: DateTime(2026, 10, 7, 15), start: a, end: b,
+          totalBorrowings: 0, totalReturned: 0, totalOverdue: 0, totalDamage: 0,
+          totalEquipment: 90, onTimeRate: 0);
+      final term = chosen(DateTime(2026, 8, 1), DateTime(2026, 10, 7));
+      expect(term.isLastDays, isFalse);
+      expect(term.periodDays, 68);
+      expect(term.periodLine, 'Covers Aug 1, 2026 to Oct 7, 2026 (68 days)');
+      expect(term.fileStem, 'labtrack-report-2026-08-01-to-2026-10-07');
+      expect(chosen(DateTime(2026, 10, 7), DateTime(2026, 10, 7)).periodLine,
+          'Covers Oct 7, 2026 to Oct 7, 2026 (1 day)');
+      expect(report.isLastDays, isTrue);
+      expect(report.fileStem, 'labtrack-report-2026-10-07-last-90-days');
+    });
+
+    test('the figures as numbers for Excel, On-Time Returns as a fraction', () {
+      expect(report.figureValues.first, ('Total Borrowings', 28));
+      expect(report.figureValues[1].$2, closeTo(0.926, 1e-9));
+    });
+
+    test('counts requests and items, and items by status in a fixed order', () {
+      expect(report.requestCount, 4);
+      expect(report.requestsLine, '4 requests for 6 items');
+      expect(report.statusCounts,
+          [('Approved', 1), ('Returned', 3), ('Cancelled', 1), ('Rejected', 1)]);
+    });
+
+    test('the copied text reads like a document, not a terminal', () {
+      final text = report.asText();
+      expect(text, contains('CEA LABORATORY REPORT'));
+      expect(text, contains('Total Borrowings: 28'));
+      expect(text, contains('On-Time Returns: 93%'));
+      expect(text, contains('1. Beaker 1000 mL: borrowed 13 times'));
+      expect(text, contains('2. Flask 500 mL: borrowed 1 time'));
+      expect(text, contains('REQUESTS (newest first)\n4 requests for 6 items\n'
+          'Items by status: Approved 1, Returned 3, Cancelled 1, Rejected 1'));
+      expect(text, contains('Today, Oct 7, 2026\n'
+          '9:05 AM - ce demo - Beaker 1000 mL #1 - Returned\n'
+          '8:30 AM - IE Demo - Beaker 1000 mL × 2 - Returned\n'
+          '8:30 AM - IE Demo - Flask 500 mL #1 - Rejected\n'));
+      expect(text, contains('Yesterday, Oct 6, 2026\n'
+          '11:56 AM - 26-12345-222 - Current Meter - Cancelled\n'));
+      for (final terminalBit in ['====', '----', '[Returned]', ' | ', 'Courier']) {
+        expect(text, isNot(contains(terminalBit)));
+      }
+    });
+
+    test('an empty period says so', () {
+      final empty = FullReport(madeAt: DateTime(2026, 10, 7), days: 90,
+          totalBorrowings: 0, totalReturned: 0, totalOverdue: 0, totalDamage: 0,
+          totalEquipment: 90, onTimeRate: 0);
+      expect(empty.madeLine, 'Made on Oct 7, 2026 at 12:00 AM');
+      expect(empty.asText(), contains('Nothing was borrowed in this period.'));
+      expect(empty.asText(), contains('No requests in this period.'));
     });
   });
 }

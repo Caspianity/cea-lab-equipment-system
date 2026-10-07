@@ -1553,6 +1553,18 @@ class ApiService {
     return _mapTransactionDocs(snap.docs);
   }
 
+  // Transactions sent from [start] up to, not including, [end]: the Full
+  // Report for dates staff chose (2026-10-07). Both bounds are on the one
+  // field, so the automatic index still covers it.
+  static Future<List<dynamic>> getRequestsBetween(DateTime start, DateTime end) async {
+    final snap = await _db
+        .collection('borrow_transactions')
+        .where('borrow_date', isGreaterThanOrEqualTo: Timestamp.fromDate(start))
+        .where('borrow_date', isLessThan: Timestamp.fromDate(end))
+        .get();
+    return _mapTransactionDocs(snap.docs);
+  }
+
   static Future<int> damageReportCount() async {
     final snap = await _db.collection('damage_reports').count().get();
     return snap.count ?? 0;

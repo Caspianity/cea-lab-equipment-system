@@ -1,15 +1,22 @@
 // -----------------------------------------------------------------------------
-// LabTrack - the Reports workbook (.xlsx)
+// LabTrack - the Excel report (.xlsx)
 //
 // Added 2026-10-06; replaces the .csv download (2026-10-05), which staff found
 // confusing: one flat sheet of raw values with stored statuses like
 // "Approved" that did not say whether an item was late or ever collected.
-// The workbook is a template with two sheets:
-//   • Summary: title, period, the figures with what each one means, the most
-//     borrowed items, and the equipment right now;
-//   • Borrowing records: one row per item asked for, newest first, with bold
-//     headers, set widths, real dates, plain statuses ("Returned late", "Not
-//     picked up") and a frozen header row with filters.
+//
+// 2026-10-07: the workbook holds the same report as the Full Report page and
+// its PDF (the user: "make the excel report detailed the same with the pdf
+// printable"), built from the same FullReport, so the numbers always match:
+//   • Report: title, period and who made it; the Summary (the six Reports
+//     figures); Most Borrowed Equipment; how many requests, and their items by
+//     status. The first sheet reads like the first page of the PDF.
+//   • Requests: one row per request, as the PDF lists them, newest first, with
+//     a frozen header row and filters.
+//   • Borrowing records: one row per item, with every detail (who approved,
+//     handed over and received it, times, condition, notes), the stored
+//     status as on the page and the PDF, and its result in plain words
+//     ("Returned late", "Not picked up").
 // Pure Dart apart from the shared helpers: unit-tested.
 // -----------------------------------------------------------------------------
 
@@ -17,64 +24,95 @@ import 'dart:typed_data';
 
 import '../constants.dart';
 import 'api_service.dart';
-import 'report_summary.dart';
+import 'full_report.dart';
 import 'xlsx.dart';
 
 class ReportXlsx {
+  static const requestColumns = [
+    'Sent', 'Student', 'Student No.', 'Items', 'Number of items', 'Status',
+  ];
+  static const _requestWidths = <double>[22, 26, 15, 56, 16, 14];
+
   static const recordColumns = [
-    'Requested', 'Student', 'Student No.', 'Item', 'Item code', 'Status',
+    'Requested', 'Student', 'Student No.', 'Item', 'Item code', 'Status', 'Result',
     'Return by', 'Picked up', 'Returned', 'Condition', 'Subject', 'Purpose',
     'Approved by', 'Handed over by', 'Received by', 'Notes',
   ];
   static const _recordWidths = <double>[
-    22, 26, 15, 30, 13, 20, 22, 22, 22, 12, 18, 34, 18, 18, 18, 36,
+    22, 26, 15, 30, 13, 12, 20, 22, 22, 22, 12, 18, 34, 18, 18, 18, 36,
   ];
 
-  // "labtrack-report-2026-10-06-last-30-days.xlsx"
-  static String fileName(ReportSummary s) {
-    String two(int n) => n.toString().padLeft(2, '0');
-    final d = s.to;
-    return 'labtrack-report-${d.year}-${two(d.month)}-${two(d.day)}-last-${s.days}-days.xlsx';
-  }
+  // "labtrack-report-2026-10-07-last-90-days.xlsx"
+  static String fileName(FullReport r) => '${r.fileStem}.xlsx';
 
-  static Uint8List build(ReportSummary s, List<dynamic> txns,
-          {String generatedBy = '', DateTime? now}) =>
-      Xlsx.build([
-        summarySheet(s, generatedBy: generatedBy),
-        recordsSheet(txns, now: now ?? s.to),
+  static Uint8List build(FullReport r) => Xlsx.build([
+        reportSheet(r),
+        requestsSheet(r),
+        recordsSheet(r.requests, now: r.madeAt),
       ]);
 
-  static XSheet summarySheet(ReportSummary s, {String generatedBy = ''}) {
+  static XSheet reportSheet(FullReport r) {
     XCell t(Object? v, [int style = Xlsx.normal]) => XCell(v, style);
+    final period = r.isLastDays
+        ? 'Last ${r.days} days: ${formatDate(r.from)} to ${formatDate(r.to)}'
+        : '${formatDate(r.from)} to ${formatDate(r.to)} (${r.periodDays} '
+            '${r.periodDays == 1 ? 'day' : 'days'})';
     final rows = <List<XCell?>>[
-      [t('LabTrack: CEA Laboratory Borrowing Report', Xlsx.title)],
-      [t('New Era University, College of Engineering and Architecture')],
-      [t('Period'), t('${formatDate(s.from)} to ${formatDate(s.to)} (last ${s.days} days)')],
-      [t('Generated'), t(s.to, Xlsx.dateTime), if (generatedBy.isNotEmpty) t('by $generatedBy')],
+      [t('CEA Laboratory Report', Xlsx.title)],
+      [t('LabTrack, New Era University')],
+      [t('Period', Xlsx.bold), t(period)],
+      [t('Made', Xlsx.bold), t(r.madeAt, Xlsx.dateTime),
+       if (r.madeBy.isNotEmpty) t('by ${r.madeBy}')],
       [],
-      [t('At a glance', Xlsx.bold)],
-      for (final line in s.glance) [t(line)],
+      [t('Summary', Xlsx.bold)],
+      [t('Figure', Xlsx.header), t('Value', Xlsx.header)],
+      for (final (name, value) in r.figureValues)
+        [t(name), t(value, name == FullReport.onTimeLabel ? Xlsx.percent : Xlsx.normal)],
+      [t(FullReport.note, Xlsx.note)],
       [],
-      [t('Figure', Xlsx.header), t('Value', Xlsx.header), t('What it means', Xlsx.header)],
-      for (final (label, value, meaning) in s.figures)
-        [t(label), t(value, value is double ? Xlsx.percent : Xlsx.normal), t(meaning, Xlsx.note)],
-      [],
-      [t('Most borrowed items', Xlsx.header), t('Times handed over', Xlsx.header)],
-      if (s.mostBorrowed.isEmpty) [t('No items were handed over in this period.', Xlsx.note)],
-      for (final e in s.mostBorrowed.entries) [t(e.key), t(e.value)],
-      if (s.equipment.isNotEmpty) ...[
-        [],
-        [t('Equipment right now', Xlsx.header), t('Items', Xlsx.header)],
-        for (final e in s.equipment.entries)
-          [t(e.key, e.key == 'Total' ? Xlsx.bold : Xlsx.normal),
-           t(e.value, e.key == 'Total' ? Xlsx.bold : Xlsx.normal)],
+      [t('Most Borrowed Equipment', Xlsx.bold)],
+      if (r.mostBorrowed.isEmpty)
+        [t('Nothing was borrowed in this period.', Xlsx.note)]
+      else ...[
+        [t('Rank', Xlsx.header), t('Equipment', Xlsx.header), t('Times borrowed', Xlsx.header)],
+        for (final (i, e) in r.mostBorrowed.entries.indexed) [t(i + 1), t(e.key), t(e.value)],
       ],
       [],
-      [t('The "Borrowing records" sheet has one row for every item asked for in '
-          'this period, newest first.', Xlsx.note)],
+      [t('Requests', Xlsx.bold)],
+      if (r.requests.isEmpty)
+        [t('No requests in this period.', Xlsx.note)]
+      else ...[
+        [t(r.requestsLine)],
+        [t('Status', Xlsx.header), t('Items', Xlsx.header)],
+        for (final (status, n) in r.statusCounts) [t(status), t(n)],
+        [t('Counted by item: a request for 3 beakers counts 3.', Xlsx.note)],
+      ],
+      [],
+      [t('Every request is on the "Requests" sheet, newest first. Every item, with all its '
+          'details, is on the "Borrowing records" sheet.', Xlsx.note)],
     ];
-    return XSheet('Summary', rows, widths: const [30, 26, 64]);
+    return XSheet('Report', rows, widths: const [30, 44, 18]);
   }
+
+  // One row per request, as the PDF lists them.
+  static XSheet requestsSheet(FullReport r) => XSheet(
+        'Requests',
+        [
+          [for (final c in requestColumns) XCell(c, Xlsx.header)],
+          for (final day in r.requestDays)
+            for (final l in day.lines)
+              [
+                l.sent == null ? null : XCell(l.sent, Xlsx.dateTime),
+                XCell(l.student),
+                l.number.isEmpty ? null : XCell(l.number),
+                XCell(l.items),
+                XCell(l.count),
+                XCell(l.status, Xlsx.bold),
+              ],
+        ],
+        widths: _requestWidths,
+        tableHeader: true,
+      );
 
   static XSheet recordsSheet(List<dynamic> txns, {DateTime? now}) {
     XCell? date(dynamic v) {
@@ -107,7 +145,8 @@ class ReportXlsx {
             text(t['student_number']),
             text(t['equipment_name']),
             text(t['qr_code']),
-            XCell(ApiService.loanOutcome(t, now: now), Xlsx.bold),
+            text(t['status'], Xlsx.bold),
+            XCell(ApiService.loanOutcome(t, now: now)),
             date(t['due_date']),
             date(t['picked_up_at']),
             date(t['return_date']),

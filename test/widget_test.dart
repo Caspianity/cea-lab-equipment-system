@@ -7,13 +7,16 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:cea_lab_app/screens/auth/login_screen.dart';
+import 'package:cea_lab_app/screens/staff/full_report_screen.dart';
 import 'package:cea_lab_app/screens/staff/request_card.dart';
 import 'package:cea_lab_app/screens/staff/return_flow.dart';
 import 'package:cea_lab_app/screens/student/how_it_works_screen.dart';
+import 'package:cea_lab_app/services/full_report.dart';
 import 'package:cea_lab_app/services/session.dart';
 
 void main() {
@@ -172,6 +175,220 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Log Damage & Hold?'), findsNothing);
     });
+  });
+
+  // 2026-10-07: Export Full Report was a terminal-style text block; it is a
+  // page now, and Copy Report gives plain text.
+  testWidgets('The full report reads as a page and copies plain text',
+      (WidgetTester tester) async {
+    tester.view.physicalSize = const Size(1200, 3000); // all of it on screen
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    String? copied;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform,
+        (call) async {
+      if (call.method == 'Clipboard.setData') {
+        copied = (call.arguments as Map)['text'] as String?;
+      }
+      return null;
+    });
+    addTearDown(() => tester.binding.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform, null));
+
+    await tester.pumpWidget(MaterialApp(
+      home: FullReportScreen(
+        report: FullReport(
+          madeAt: DateTime(2026, 10, 7, 14, 5),
+          madeBy: 'Ramoel Bello',
+          days: 90,
+          totalBorrowings: 28,
+          totalReturned: 27,
+          totalOverdue: 1,
+          totalDamage: 4,
+          totalEquipment: 90,
+          onTimeRate: 92.6,
+          mostBorrowed: const {'Beaker 1000 mL': 13},
+          requests: const [
+            {'borrow_date': '2026-10-07T09:05:00.000', 'borrower_name': 'ce demo',
+             'equipment_name': 'Beaker 1000 mL #1', 'status': 'Returned'},
+          ],
+        ),
+      ),
+    ));
+
+    for (final shown in [
+      'CEA Laboratory Report',
+      'Made on Oct 7, 2026 at 2:05 PM by Ramoel Bello',
+      'Covers the last 90 days: Jul 9, 2026 to Oct 7, 2026',
+      'Summary', 'Total Borrowings', '28', 'On-Time Returns', '93%',
+      'Most Borrowed Equipment', 'Beaker 1000 mL', '13 times',
+      'Requests', '1 request for 1 item', 'Returned: 1', 'Today, Oct 7, 2026',
+      '9:05 AM', 'ce demo', 'Beaker 1000 mL #1', 'Returned',
+    ]) {
+      expect(find.text(shown), findsOneWidget, reason: shown);
+    }
+    expect(find.textContaining('Show all'), findsNothing); // only one request
+
+    await tester.tap(find.text('Copy Report'));
+    await tester.pumpAndSettle();
+    expect(copied, contains('Total Borrowings: 28'));
+    expect(copied, contains('Today, Oct 7, 2026\n9:05 AM - ce demo - Beaker 1000 mL #1 - Returned'));
+    expect(copied, isNot(contains('====')));
+    expect(find.textContaining('Report copied.'), findsOneWidget);
+  });
+
+  // "Too many" (the user): the 10 newest requests, then "Show all".
+  testWidgets('The full report shows the 10 newest requests until Show all',
+      (WidgetTester tester) async {
+    tester.view.physicalSize = const Size(1200, 4000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(MaterialApp(
+      home: FullReportScreen(
+        report: FullReport(
+          madeAt: DateTime(2026, 10, 7, 17, 0),
+          days: 90,
+          totalBorrowings: 12, totalReturned: 12, totalOverdue: 0, totalDamage: 0,
+          totalEquipment: 90, onTimeRate: 100,
+          requests: [
+            for (var i = 0; i < 12; i++)
+              {'student_id': 's$i', 'borrow_date': '2026-10-07T${(16 - i).toString().padLeft(2, '0')}:00:00.000',
+               'borrower_name': 'Student $i', 'equipment_name': 'Flask 500 mL #$i',
+               'status': 'Returned'},
+          ],
+        ),
+      ),
+    ));
+
+    expect(find.text('12 requests for 12 items'), findsOneWidget);
+    expect(find.text('Student 0'), findsOneWidget); // newest
+    expect(find.text('Student 9'), findsOneWidget); // tenth
+    expect(find.text('Student 10'), findsNothing);
+    expect(find.text('Show all (2 more)'), findsOneWidget);
+
+    await tester.tap(find.text('Show all (2 more)'));
+    await tester.pumpAndSettle();
+    expect(find.text('Student 10'), findsOneWidget);
+    expect(find.text('Student 11'), findsOneWidget);
+    expect(find.textContaining('Show all'), findsNothing);
+  });
+
+  // 2026-10-07: "Change dates", and on the web Download Excel / Download PDF.
+  group('Full report downloads and dates', () {
+    FullReport report({DateTime? start, DateTime? end, int borrowed = 3}) => FullReport(
+          madeAt: DateTime.now(),
+          madeBy: 'Ramoel Bello',
+          start: start,
+          end: end,
+          totalBorrowings: borrowed, totalReturned: borrowed, totalOverdue: 0,
+          totalDamage: 0, totalEquipment: 90, onTimeRate: 100,
+          mostBorrowed: const {'Beaker 1000 mL': 3},
+        );
+
+    testWidgets('the download buttons answer outside the web portal', (tester) async {
+      tester.view.physicalSize = const Size(1200, 2400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(
+          MaterialApp(home: FullReportScreen(report: report(), showDownloads: true)));
+
+      expect(find.text('Download Excel'), findsOneWidget);
+      expect(find.text('Download PDF to print'), findsOneWidget);
+      expect(find.text('Change dates'), findsNothing); // no loader given
+
+      await tester.tap(find.text('Download Excel'));
+      await tester.pump();
+      expect(find.text('Downloads work in the web portal.'), findsOneWidget);
+      await tester.pumpAndSettle(); // in, then its timer starts
+      await tester.pump(const Duration(seconds: 5)); // the message times out
+      await tester.pumpAndSettle();
+      expect(find.text('Downloads work in the web portal.'), findsNothing);
+
+      await tester.runAsync(() async {
+        await tester.tap(find.text('Download PDF to print'));
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+      });
+      await tester.pumpAndSettle();
+      expect(find.text('Downloads work in the web portal.'), findsOneWidget);
+    });
+
+    testWidgets('the phone shows no download buttons', (tester) async {
+      await tester.pumpWidget(MaterialApp(home: FullReportScreen(report: report())));
+      expect(find.text('Download Excel'), findsNothing);
+      expect(find.text('Copy Report'), findsOneWidget);
+    });
+
+    testWidgets('Change dates makes the report for the chosen period', (tester) async {
+      final asked = <(DateTime, DateTime)>[];
+      await tester.pumpWidget(MaterialApp(
+        home: FullReportScreen(
+          report: report(),
+          loadPeriod: (start, end) async {
+            asked.add((start, end));
+            return report(start: start, end: end, borrowed: 7);
+          },
+        ),
+      ));
+      expect(find.textContaining('Covers the last 90 days'), findsOneWidget);
+
+      await tester.tap(find.text('Change dates'));
+      await tester.pumpAndSettle();
+      expect(find.text('CHOOSE THE DATES FOR THE REPORT'), findsOneWidget);
+      await tester.tap(find.text('Make Report'));
+      await tester.pumpAndSettle();
+
+      expect(asked, hasLength(1));
+      final today = DateTime.now();
+      expect(asked.single.$2, DateTime(today.year, today.month, today.day));
+      expect(find.textContaining('Covers the last 90 days'), findsNothing);
+      expect(find.textContaining(RegExp(r'^Covers .* \(91 days\)$')), findsOneWidget);
+      expect(find.text('7'), findsWidgets); // the new period's Total Borrowings
+    });
+  });
+
+  // Found on the phone: after "Show all", scrolling to the top and back
+  // collapsed the list again (the list had dropped the section's state).
+  testWidgets('Show all stays open after scrolling away and back',
+      (WidgetTester tester) async {
+    tester.view.physicalSize = const Size(400, 600); // a small screen
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(MaterialApp(
+      home: FullReportScreen(
+        report: FullReport(
+          madeAt: DateTime(2026, 10, 7, 17, 0),
+          days: 90,
+          totalBorrowings: 12, totalReturned: 12, totalOverdue: 0, totalDamage: 0,
+          totalEquipment: 90, onTimeRate: 100,
+          // enough above the requests that they leave the list's reach at the top
+          mostBorrowed: {for (var i = 0; i < 12; i++) 'Item $i': 12 - i},
+          requests: [
+            for (var i = 0; i < 12; i++)
+              {'student_id': 's$i', 'borrow_date': '2026-10-07T${(16 - i).toString().padLeft(2, '0')}:00:00.000',
+               'borrower_name': 'Student $i', 'equipment_name': 'Flask 500 mL #$i',
+               'status': 'Returned'},
+          ],
+        ),
+      ),
+    ));
+    final list = find.byType(Scrollable).first;
+
+    await tester.scrollUntilVisible(find.text('Show all (2 more)'), 300, scrollable: list);
+    await tester.ensureVisible(find.text('Show all (2 more)')); // built is not on screen
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Show all (2 more)'));
+    await tester.pumpAndSettle();
+
+    await tester.drag(list, const Offset(0, 20000)); // back to the top
+    await tester.pumpAndSettle();
+    expect(find.text('CEA Laboratory Report'), findsOneWidget);
+    // The premise: up here the list has dropped the requests section
+    // altogether, which is when a section-held "Show all" was forgotten.
+    expect(find.text('Newest first'), findsNothing);
+
+    await tester.scrollUntilVisible(find.text('Student 11'), 300, scrollable: list);
+    expect(find.text('Student 11'), findsOneWidget);
+    expect(find.textContaining('Show all'), findsNothing);
   });
 
   testWidgets('Login screen renders core controls', (WidgetTester tester) async {
