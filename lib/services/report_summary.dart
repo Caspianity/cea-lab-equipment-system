@@ -2,12 +2,13 @@
 // LabTrack - the Reports figures, in plain words
 //
 // Added 2026-10-06 (usability update): staff found Reports hard to read. Every
-// figure the Reports tab, its copied summary and its .xlsx workbook show is
-// worked out here, once, from the period's records, together with the
-// sentence that explains it. Pure Dart, so it is unit-tested.
+// figure on the Summary sheet of the Excel report (report_xlsx.dart) is worked
+// out here, once, from the period's records, together with the sentence that
+// explains it. Pure Dart, so it is unit-tested. (Until 2026-10-07 the Reports
+// tab showed these figures too, with a "Copy Summary" button; the tab is back
+// to its 1.0.16 look, and only the download kept them.)
 // -----------------------------------------------------------------------------
 
-import '../constants.dart';
 import 'api_service.dart';
 
 class ReportSummary {
@@ -149,38 +150,4 @@ class ReportSummary {
             'Damage reported and not resolved yet (all time, not just this period).'),
       ];
 
-  // The summary as plain text, for "Copy Summary".
-  String asText({String generatedBy = ''}) {
-    final b = StringBuffer()
-      ..writeln('LabTrack: CEA Laboratory borrowing report')
-      ..writeln('New Era University')
-      ..writeln('Period: ${formatDate(from)} to ${formatDate(to)} (last $days days)')
-      ..writeln('Generated: ${formatDate(to)}'
-          '${generatedBy.isEmpty ? '' : ' by $generatedBy'}')
-      ..writeln()
-      ..writeln('AT A GLANCE');
-    for (final l in glance) {
-      b.writeln('- $l');
-    }
-    b
-      ..writeln()
-      ..writeln('FIGURES');
-    for (final (label, value, _) in figures) {
-      b.writeln('$label: ${value is double ? '${(value * 100).round()}%' : value}');
-    }
-    if (mostBorrowed.isNotEmpty) {
-      b
-        ..writeln()
-        ..writeln('MOST BORROWED ITEMS');
-      var rank = 1;
-      mostBorrowed.forEach((name, n) => b.writeln('${rank++}. $name: $n'));
-    }
-    if (equipment.isNotEmpty) {
-      b
-        ..writeln()
-        ..writeln('EQUIPMENT RIGHT NOW');
-      equipment.forEach((status, n) => b.writeln('$status: $n'));
-    }
-    return b.toString();
-  }
 }
