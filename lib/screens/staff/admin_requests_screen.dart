@@ -12,6 +12,7 @@
 
 import 'package:flutter/material.dart';
 
+import '../../constants.dart';
 import '../../services/api_service.dart';
 import '../../theme.dart';
 import '../../widgets/common.dart';
@@ -148,7 +149,7 @@ class _AdminRequestsScreenState extends State<AdminRequestsScreen> {
             child: Row(children: [
               const Icon(Icons.science_outlined, size: 13, color: AppTheme.textMid),
               const SizedBox(width: 6),
-              Expanded(child: Text('${e['equipment_name'] ?? ''}  •  ${e['qr_code'] ?? ''}',
+              Expanded(child: Text(joinParts([e['equipment_name'], e['qr_code']]),
                   style: const TextStyle(fontSize: 12, color: AppTheme.textDark, fontWeight: FontWeight.w600))),
               const Icon(Icons.calendar_today_rounded, size: 13, color: AppTheme.textMid),
               const SizedBox(width: 4),

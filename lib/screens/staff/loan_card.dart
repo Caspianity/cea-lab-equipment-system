@@ -253,7 +253,7 @@ class _LoanRequestCardState extends State<LoanRequestCard> {
                 Expanded(
                   child: Padding(
                     padding: const EdgeInsets.symmetric(vertical: 6),
-                    child: Text('${t['equipment_name'] ?? ''}  •  ${t['qr_code'] ?? ''}',
+                    child: Text(joinParts([t['equipment_name'], t['qr_code']]),
                         style: const TextStyle(
                             fontSize: 12, color: AppTheme.textDark, fontWeight: FontWeight.w600)),
                   ),

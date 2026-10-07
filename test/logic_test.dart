@@ -683,6 +683,16 @@ void main() {
     });
   });
 
+  // Live test 2026-10-07: an item without a QR code read "Digital Multimeter  •".
+  group('joinParts', () {
+    test('puts the separator only between parts that are there', () {
+      expect(joinParts(['Beaker 1000 mL #1', 'OTH-137911']), 'Beaker 1000 mL #1  •  OTH-137911');
+      expect(joinParts(['Digital Multimeter', '']), 'Digital Multimeter');
+      expect(joinParts([null, 'Electronics'], separator: '  ·  '), 'Electronics');
+      expect(joinParts(['', ' ', null]), '');
+    });
+  });
+
   // Regression: studentId used to int.parse the Firebase UID, which is always
   // alphanumeric, so it was always 0 and Edit Profile wrote to students/0.
   group('Session.studentId', () {
@@ -1025,6 +1035,19 @@ void main() {
         {'equipment_name': 'No code yet', 'qr_code': ''},
       ]);
       expect(String.fromCharCodes(bytes.take(5)), '%PDF-');
+    });
+
+    // Live test 2026-10-07: the dialog said 90 labels for an 89-label PDF;
+    // it now counts from the same list the PDF is made of.
+    test('only items with a code get a label', () {
+      final items = [
+        {'equipment_name': 'Beaker 1000 mL #1', 'qr_code': 'GLS-000001'},
+        {'equipment_name': 'Digital Multimeter', 'qr_code': ''},
+        {'equipment_name': 'Older item'},
+        {'equipment_name': 'Flask 500 mL #1', 'qr_code': ' '},
+      ];
+      expect(QrLabels.withCode(items).map((e) => e['equipment_name']),
+          ['Beaker 1000 mL #1']);
     });
   });
 }

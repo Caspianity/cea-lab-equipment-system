@@ -29,14 +29,19 @@ class QrLabels {
       .replaceAll('…', '...')
       .replaceAll(RegExp('[^\u0000-ÿ]'), '?');
 
+  // The items that get a label: those with a QR code. Inventory counts and
+  // names the rest from this too; its dialog used to promise a label for
+  // every item (90 for an 89-label PDF, live test 2026-10-07).
+  static List<Map<String, dynamic>> withCode(List<Map<String, dynamic>> items) => [
+        for (final e in items)
+          if ('${e['qr_code'] ?? ''}'.trim().isNotEmpty) e,
+      ];
+
   // [items]: equipment records with equipment_name and qr_code. Those
   // without a code are left out.
   static Future<Uint8List> build(List<Map<String, dynamic>> items,
       {String footer = 'CEA Laboratory, NEU'}) {
-    final labels = [
-      for (final e in items)
-        if ('${e['qr_code'] ?? ''}'.trim().isNotEmpty) e,
-    ];
+    final labels = withCode(items);
     final doc = pw.Document(title: 'LabTrack QR labels', author: 'LabTrack');
     for (var start = 0; start < labels.length; start += perPage) {
       final page = labels.skip(start).take(perPage).toList();

@@ -140,6 +140,29 @@ class _HandOverScreenState extends State<HandOverScreen> {
     _onCode(code);
   }
 
+  // A unit registered before QR codes (the Digital Multimeter, live test
+  // 2026-10-07) has nothing to scan or type, so it could never be handed over
+  // and its request could only end as Not picked up. Its row gets its own
+  // button: the set-aside unit itself is handed over, no swap.
+  static bool _hasNoCode(dynamic t) => '${t['qr_code'] ?? ''}'.trim().isEmpty;
+
+  Future<void> _handOverWithoutCode(dynamic t) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      final r = await ApiService.handOver('${t['transaction_id']}', {
+        'equipment_id':   t['equipment_id'],
+        'equipment_name': t['equipment_name'],
+      });
+      _say('${r['message'] ?? (r['success'] == true ? 'Handed over.' : 'Failed.')}',
+          r['success'] == true);
+    } catch (_) {
+      _say('Could not reach the server. Try again.', false);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final first   = _records.first;
@@ -191,7 +214,9 @@ class _HandOverScreenState extends State<HandOverScreen> {
                   : done
                   ? 'Everything is handed over.'
                   : 'Scan each item as you hand it over. Another free unit of '
-                      'the same item also works; the loan changes to it.',
+                      'the same item also works; the loan changes to it.'
+                      '${waiting.any(_hasNoCode) ? ' An item without a QR code '
+                          'has its own Hand over button.' : ''}',
               style: const TextStyle(fontSize: 12, color: AppTheme.textMid)),
           const SizedBox(height: 12),
 
@@ -307,11 +332,17 @@ class _HandOverScreenState extends State<HandOverScreen> {
             Text('${t['equipment_name'] ?? ''}',
                 style: const TextStyle(
                     fontSize: 13, fontWeight: FontWeight.w600, color: AppTheme.textDark)),
-            Text('${t['qr_code'] ?? ''}',
+            Text(_hasNoCode(t) ? 'No QR code' : '${t['qr_code']}',
                 style: const TextStyle(fontSize: 11, color: AppTheme.textMid)),
           ]),
         ),
-        StatusBadge(label: state, color: color),
+        if (waiting && _hasNoCode(t))
+          TextButton(
+            onPressed: _busy ? null : () => _handOverWithoutCode(t),
+            child: const Text('Hand over'),
+          )
+        else
+          StatusBadge(label: state, color: color),
       ]),
     );
   }

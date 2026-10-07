@@ -11,6 +11,7 @@
 
 import 'package:flutter/material.dart';
 
+import '../../constants.dart';
 import '../../services/api_service.dart';
 import '../../theme.dart';
 import '../../widgets/common.dart';
@@ -77,7 +78,7 @@ Future<void> showReturnSheet(
                 color: AppTheme.textDark),
             textAlign: TextAlign.center),
         const SizedBox(height: 4),
-        Text('${equipment['qr_code'] ?? ''}  •  ${equipment['category'] ?? ''}',
+        Text(joinParts([equipment['qr_code'], equipment['category']]),
             style: const TextStyle(fontSize: 13, color: AppTheme.textMid)),
         const SizedBox(height: 12),
 

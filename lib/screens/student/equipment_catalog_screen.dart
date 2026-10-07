@@ -577,7 +577,7 @@ class _EquipmentCatalogScreenState extends State<EquipmentCatalogScreen> {
                                       fontSize: 14,
                                       color: AppTheme.textDark)),
                               const SizedBox(height: 2),
-                              Text('${e['qr_code']}  •  $category',
+                              Text(joinParts([e['qr_code'], category]),
                                   style: const TextStyle(
                                       fontSize: 12,
                                       color: AppTheme.textMid)),

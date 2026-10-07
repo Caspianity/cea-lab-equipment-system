@@ -17,7 +17,7 @@
 // runtime without adding the package_info_plus plugin, which is not worth a new
 // native dependency this close to the defense.
 const kAppVersion = '1.0.17';
-const kAppBuild = 20;
+const kAppBuild = 22;
 
 // What the About screen prints, e.g. "Version 1.0.1 (build 2)".
 const kAppVersionLabel = 'Version $kAppVersion (build $kAppBuild)';
@@ -114,3 +114,13 @@ const _kMonthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
 // "6/May/92", and an all-number form would be ambiguous between 5/6 and 6/5.
 String formatDate(DateTime d) =>
     '${_kMonthNames[d.month - 1]} ${d.day}, ${d.year}';
+
+// ─── Text ─────────────────────────────────────────────────────────────────────
+// "Beaker 1000 mL #1  •  OTH-137911": the parts that are not empty, with the
+// separator only between them. An item without a QR code (the Digital
+// Multimeter) used to read "Digital Multimeter  •" or "·  Electronics"
+// (live test 2026-10-07).
+String joinParts(Iterable<Object?> parts, {String separator = '  •  '}) => parts
+    .map((p) => '${p ?? ''}'.trim())
+    .where((p) => p.isNotEmpty)
+    .join(separator);

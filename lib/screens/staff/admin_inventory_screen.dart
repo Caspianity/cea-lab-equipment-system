@@ -190,19 +190,39 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
             behavior: SnackBarBehavior.floating));
         return;
       }
+      // Only items with a QR code get a label (QrLabels.withCode); the rest
+      // are named, so the count matches the PDF (2026-10-07).
+      final labelled = QrLabels.withCode(items);
+      final noCode = [
+        for (final e in items)
+          if (!labelled.contains(e)) '${e['equipment_name'] ?? 'Unnamed'}',
+      ];
+      if (labelled.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('None of these items has a QR code, so there is nothing to print.'),
+            behavior: SnackBarBehavior.floating));
+        return;
+      }
       final which = [
         if (_filter != 'All') _filter,
         if (_search.isNotEmpty) 'matching "$_search"',
       ].join(', ');
-      final pages = QrLabels.pages(items.length);
+      final pages = QrLabels.pages(labelled.length);
+      final leftOut = noCode.isEmpty
+          ? ''
+          : '\n\n${noCode.length == 1 ? '1 item has' : '${noCode.length} items have'} '
+              'no QR code and ${noCode.length == 1 ? 'is' : 'are'} left out: '
+              '${noCode.take(3).join(', ')}'
+              '${noCode.length > 3 ? ' and ${noCode.length - 3} more' : ''}.';
       final go = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
           icon: const Icon(Icons.qr_code_2_rounded, color: AppTheme.primary, size: 40),
           title: const Text('QR labels'),
           content: Text(
-              'A PDF of ${items.length} labels${which.isEmpty ? '' : ' ($which)'}: '
-              '${QrLabels.perPage} per A4 sheet, $pages ${pages == 1 ? 'sheet' : 'sheets'}.\n\n'
+              'A PDF of ${labelled.length} labels${which.isEmpty ? '' : ' ($which)'}: '
+              '${QrLabels.perPage} per A4 sheet, $pages ${pages == 1 ? 'sheet' : 'sheets'}.'
+              '$leftOut\n\n'
               'Print at 100% ("Actual size"), cut along the grey lines, and stick '
               'each label on its unit.'),
           actions: [
@@ -213,7 +233,7 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
         ),
       );
       if (go != true || !mounted) return;
-      final bytes = await QrLabels.build(items);
+      final bytes = await QrLabels.build(labelled);
       final now = DateTime.now();
       String two(int n) => n.toString().padLeft(2, '0');
       final ok = downloadBytes(
@@ -222,7 +242,7 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(ok
-            ? 'Downloaded ${items.length} labels.'
+            ? 'Downloaded ${labelled.length} labels.'
             : 'Labels can be downloaded from the web portal.'),
         backgroundColor: ok ? AppTheme.success : AppTheme.danger,
         behavior: SnackBarBehavior.floating,
@@ -366,7 +386,7 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
                   Text(e['equipment_name'] as String,
                       style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppTheme.textDark)),
                   const SizedBox(height: 2),
-                  Text('${e['qr_code']}  ·  ${e['category']}',
+                  Text(joinParts([e['qr_code'], e['category']], separator: '  ·  '),
                       style: const TextStyle(fontSize: 12, color: AppTheme.textMid)),
                   if (ApiService.asDate(e['created_at']) case final added?) ...[
                     const SizedBox(height: 2),
