@@ -39,7 +39,9 @@ Future<void> showReturnSheet(
       ? AppTheme.warning
       : isAvailable
           ? AppTheme.success
-          : AppTheme.danger;
+          : status == 'Reserved'
+              ? AppTheme.accent
+              : AppTheme.danger;
   final equipName   = '${equipment['equipment_name'] ?? ''}';
   final equipId     = '${equipment['equipment_id'] ?? ''}';
   final location    = '${equipment['location'] ?? ''}';
@@ -134,8 +136,12 @@ Future<void> showReturnSheet(
                 isAvailable
                     ? 'This equipment is already Available — no return '
                         'needed.'
-                    : 'This equipment is marked $status and is not out on '
-                        'loan, so there is nothing to return.',
+                    : status == 'Reserved'
+                        ? 'This equipment is reserved for a pending request '
+                            'and has not been lent yet, so there is nothing '
+                            'to return.'
+                        : 'This equipment is marked $status and is not out '
+                            'on loan, so there is nothing to return.',
                 style: const TextStyle(fontSize: 13, color: AppTheme.textDark),
               )),
             ]),
@@ -155,9 +161,15 @@ Future<void> showReturnSheet(
   );
   if (condition == null || !context.mounted) return;
 
+  // Both taken before the save. Opened from a loan card on Requests →
+  // Approved (a live list), [context] is gone once the loan is returned, often
+  // before doReturn answers. This used to stop here, so staff got no
+  // confirmation and a damaged return never offered "Log Damage & Hold?"
+  // (live test 2026-10-07, U2).
   final messenger = ScaffoldMessenger.of(context);
+  final navigator = Navigator.of(context);
   final res = await doReturn(condition);
-  if (!context.mounted) return;
+  if (!navigator.mounted) return;
   if (res['success'] != true) {
     messenger.showSnackBar(SnackBar(
       content: Text(res['message'] ?? 'Failed to process return.'),
@@ -175,7 +187,9 @@ Future<void> showReturnSheet(
     behavior: SnackBarBehavior.floating,
   ));
   if (condition == 'Damaged') {
-    await _offerDamageFollowUp(context, res, equipId, equipName);
+    // The app's navigator stands in for a card that left the screen.
+    await _offerDamageFollowUp(context.mounted ? context : navigator.context,
+        res, equipId, equipName);
   }
 }
 
@@ -183,6 +197,7 @@ Future<void> _offerDamageFollowUp(BuildContext context,
     Map<String, dynamic> res, String equipId, String equipName) async {
   final borrower  = '${res['borrower_name'] ?? 'the student'}';
   final studentId = '${res['student_id'] ?? ''}';
+  final messenger = ScaffoldMessenger.of(context);
   final apply = await showDialog<bool>(
     context: context,
     builder: (dCtx) => AlertDialog(
@@ -219,8 +234,7 @@ Future<void> _offerDamageFollowUp(BuildContext context,
     await ApiService.setStudentHold(studentId, true,
         reason: 'Damaged equipment "$equipName" pending settlement.');
   }
-  if (!context.mounted) return;
-  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+  messenger.showSnackBar(const SnackBar(
     content: Text('Damage report logged and hold placed.'),
     backgroundColor: AppTheme.danger,
     behavior: SnackBarBehavior.floating,

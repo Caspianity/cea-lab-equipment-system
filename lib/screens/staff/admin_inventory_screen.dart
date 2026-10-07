@@ -13,6 +13,8 @@ import 'package:image_picker/image_picker.dart';
 
 import '../../constants.dart';
 import '../../services/api_service.dart';
+import '../../services/file_download.dart';
+import '../../services/qr_labels.dart';
 import '../../services/session.dart';
 import '../../theme.dart';
 import '../../widgets/common.dart';
@@ -134,10 +136,113 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
     }
   }
 
+  Widget _categoryChips() => SizedBox(
+        height: 32,
+        child: ListView.separated(
+          scrollDirection: Axis.horizontal,
+          itemCount: _categories.length,
+          separatorBuilder: (_, _) => const SizedBox(width: 8),
+          itemBuilder: (_, i) {
+            final c = _categories[i];
+            final sel = _filter == c;
+            return GestureDetector(
+              onTap: () => setState(() => _filter = c),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 160),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                decoration: BoxDecoration(
+                  color: sel ? AppTheme.accent : const Color(0x1AFFFFFF),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(c,
+                    style: TextStyle(
+                        color: sel ? AppTheme.primary : AppTheme.textLight,
+                        fontSize: 12,
+                        fontWeight: sel ? FontWeight.bold : FontWeight.normal)),
+              ),
+            );
+          },
+        ),
+      );
+
+  // ── QR labels (web portal, 2026-10-06) ──
+  // A PDF of label sheets for every item the category and search show. The
+  // list on screen is paged, so the whole inventory is read and filtered the
+  // same way, only when staff ask.
+  bool _makingLabels = false;
+
+  bool _matches(Map<String, dynamic> e) {
+    final q = _search.toLowerCase();
+    return (_filter == 'All' || e['category'] == _filter) &&
+        (q.isEmpty ||
+            '${e['equipment_name'] ?? ''}'.toLowerCase().contains(q) ||
+            '${e['qr_code'] ?? ''}'.toLowerCase().contains(q));
+  }
+
+  Future<void> _qrLabels() async {
+    setState(() => _makingLabels = true);
+    try {
+      final items = (await ApiService.getAllEquipment()).where(_matches).toList();
+      if (!mounted) return;
+      if (items.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('No items match the filters.'),
+            behavior: SnackBarBehavior.floating));
+        return;
+      }
+      final which = [
+        if (_filter != 'All') _filter,
+        if (_search.isNotEmpty) 'matching "$_search"',
+      ].join(', ');
+      final pages = QrLabels.pages(items.length);
+      final go = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          icon: const Icon(Icons.qr_code_2_rounded, color: AppTheme.primary, size: 40),
+          title: const Text('QR labels'),
+          content: Text(
+              'A PDF of ${items.length} labels${which.isEmpty ? '' : ' ($which)'}: '
+              '${QrLabels.perPage} per A4 sheet, $pages ${pages == 1 ? 'sheet' : 'sheets'}.\n\n'
+              'Print at 100% ("Actual size"), cut along the grey lines, and stick '
+              'each label on its unit.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+            ElevatedButton(
+                onPressed: () => Navigator.pop(ctx, true), child: const Text('Download PDF')),
+          ],
+        ),
+      );
+      if (go != true || !mounted) return;
+      final bytes = await QrLabels.build(items);
+      final now = DateTime.now();
+      String two(int n) => n.toString().padLeft(2, '0');
+      final ok = downloadBytes(
+          'labtrack-qr-labels-${now.year}-${two(now.month)}-${two(now.day)}.pdf', bytes,
+          mimeType: 'application/pdf');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(ok
+            ? 'Downloaded ${items.length} labels.'
+            : 'Labels can be downloaded from the web portal.'),
+        backgroundColor: ok ? AppTheme.success : AppTheme.danger,
+        behavior: SnackBarBehavior.floating,
+      ));
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Could not make the labels. Try again.'),
+          backgroundColor: AppTheme.danger,
+          behavior: SnackBarBehavior.floating));
+    } finally {
+      if (mounted) setState(() => _makingLabels = false);
+    }
+  }
+
   Color _conditionColor(String c) {
     switch (c) {
       case 'Available': return AppTheme.success;
       case 'Borrowed':  return AppTheme.warning;
+      case 'Reserved':  return AppTheme.accent;
       default:          return AppTheme.textMid;
     }
   }
@@ -409,35 +514,24 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
                   ),
                 ),
                 const SizedBox(height: 10),
-                // Category filter chips
-                SizedBox(
-                  height: 32,
-                  child: ListView.separated(
-                    scrollDirection: Axis.horizontal,
-                    itemCount: _categories.length,
-                    separatorBuilder: (_, _) => const SizedBox(width: 8),
-                    itemBuilder: (_, i) {
-                      final c = _categories[i];
-                      final sel = _filter == c;
-                      return GestureDetector(
-                        onTap: () => setState(() => _filter = c),
-                        child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 160),
-                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                          decoration: BoxDecoration(
-                            color: sel ? AppTheme.accent : const Color(0x1AFFFFFF),
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Text(c,
-                              style: TextStyle(
-                                  color: sel ? AppTheme.primary : AppTheme.textLight,
-                                  fontSize: 12,
-                                  fontWeight: sel ? FontWeight.bold : FontWeight.normal)),
-                        ),
-                      );
-                    },
-                  ),
-                ),
+                // Category filter chips, and on the web portal the QR-label
+                // sheets for what the filters show (2026-10-06).
+                Row(children: [
+                  Expanded(child: _categoryChips()),
+                  if (kIsWeb) ...[
+                    const SizedBox(width: 8),
+                    TextButton.icon(
+                      onPressed: _makingLabels ? null : _qrLabels,
+                      icon: _makingLabels
+                          ? const SizedBox(
+                              width: 14, height: 14,
+                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                          : const Icon(Icons.qr_code_2_rounded, color: Colors.white, size: 18),
+                      label: const Text('QR labels',
+                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+                    ),
+                  ],
+                ]),
               ],
             ),
           ),
@@ -530,6 +624,8 @@ class _EditEquipmentSheetState extends State<_EditEquipmentSheet> {
 
   // Out on a loan right now (see the Status picker).
   bool get _onLoan => widget.equipment['status'] == 'Borrowed';
+  // Held for a student's pending request (2026-10-06).
+  bool get _reserved => widget.equipment['status'] == 'Reserved';
 
   @override
   void initState() {
@@ -591,7 +687,11 @@ class _EditEquipmentSheetState extends State<_EditEquipmentSheet> {
       final res = await ApiService.updateEquipment(equipmentId, {
         'equipment_name': _nameCtrl.text.trim(),
         'category':       _selectedCategory ?? widget.equipment['category'],
-        'status':         _selectedStatus,
+        // Only a status staff changed here. Saving other details used to
+        // write back the status the form opened with, so an item approved,
+        // returned or reserved meanwhile went back to the old one.
+        if (_selectedStatus != (widget.equipment['status'] ?? 'Available'))
+          'status':       _selectedStatus,
         'location':       _locationCtrl.text.trim(),
         'brand':          _brandCtrl.text.trim(),
         'model':          _modelCtrl.text.trim(),
@@ -798,9 +898,15 @@ class _EditEquipmentSheetState extends State<_EditEquipmentSheet> {
                         child: DropdownButton<String>(
                           isExpanded: true,
                           value: _selectedStatus,
+                          // "Reserved" works the same way: a request sets it
+                          // and deciding or cancelling the request clears it.
+                          // It is listed only for the item that has it.
                           items: (_onLoan
                                   ? const ['Borrowed']
-                                  : _statuses.where((s) => s != 'Borrowed'))
+                                  : [
+                                      if (_reserved) 'Reserved',
+                                      ..._statuses.where((s) => s != 'Borrowed'),
+                                    ])
                               .map((s) => DropdownMenuItem(
                                   value: s,
                                   child: Text(s, style: const TextStyle(fontSize: 13))))
@@ -815,6 +921,13 @@ class _EditEquipmentSheetState extends State<_EditEquipmentSheet> {
                       const Padding(
                         padding: EdgeInsets.only(top: 4),
                         child: Text('On loan. Its return will change this.',
+                            style: TextStyle(fontSize: 11, color: AppTheme.textMid)),
+                      ),
+                    if (_reserved)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 4),
+                        child: Text('Held for a pending request. Approving or '
+                            'rejecting it will change this.',
                             style: TextStyle(fontSize: 11, color: AppTheme.textMid)),
                       ),
                   ])),

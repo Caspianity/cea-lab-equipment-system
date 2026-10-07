@@ -1,6 +1,9 @@
 // Unit tests for the pure business logic in ApiService — no Firebase or
 // network needed, so these run in plain `flutter test`.
 
+import 'dart:convert';
+
+import 'package:archive/archive.dart';
 import 'package:cloud_firestore/cloud_firestore.dart' show Timestamp;
 import 'package:flutter_test/flutter_test.dart';
 
@@ -8,8 +11,11 @@ import 'package:flutter_test/flutter_test.dart';
 // business logic no longer pulls in the UI module at all.
 import 'package:cea_lab_app/constants.dart';
 import 'package:cea_lab_app/services/api_service.dart';
-import 'package:cea_lab_app/services/report_csv.dart';
+import 'package:cea_lab_app/services/qr_labels.dart';
+import 'package:cea_lab_app/services/report_summary.dart';
+import 'package:cea_lab_app/services/report_xlsx.dart';
 import 'package:cea_lab_app/services/session.dart';
+import 'package:cea_lab_app/services/xlsx.dart';
 
 void main() {
   group('Due-date policy (same-day 5:00 PM cap)', () {
@@ -515,6 +521,152 @@ void main() {
     });
   });
 
+  // 2026-10-06: sending a request reserves its units.
+  group('Reservations', () {
+    test('a unit reserved for this request is held for it', () {
+      final eq = {'status': 'Reserved', 'reserved_tx': 'tx1', 'reserved_by': 's1'};
+      expect(ApiService.isReservedFor(eq, 'tx1'), isTrue);
+    });
+
+    test('a unit reserved for another request is not', () {
+      final eq = {'status': 'Reserved', 'reserved_tx': 'tx2', 'reserved_by': 's2'};
+      expect(ApiService.isReservedFor(eq, 'tx1'), isFalse);
+    });
+
+    test('a free, lent or missing unit is not held for anyone', () {
+      expect(ApiService.isReservedFor({'status': 'Available'}, 'tx1'), isFalse);
+      // A leftover reserved_tx on a lent unit does not count.
+      expect(ApiService.isReservedFor({'status': 'Borrowed', 'reserved_tx': 'tx1'}, 'tx1'),
+          isFalse);
+      expect(ApiService.isReservedFor(null, 'tx1'), isFalse);
+    });
+
+    test('pickUnits never offers a reserved unit (reservation)', () {
+      final units = [
+        {'equipment_id': 'f1', 'equipment_name': 'Flask 500 mL #1', 'status': 'Reserved'},
+        {'equipment_id': 'f2', 'equipment_name': 'Flask 500 mL #2', 'status': 'Available'},
+      ];
+      expect(ApiService.pickUnits(units, 2, preferId: 'f1').map((u) => u['equipment_id']),
+          ['f2']);
+    });
+  });
+
+  // 2026-10-06: approved units wait at the lab until staff hand them over.
+  group('Pick-up and overdue', () {
+    final now = DateTime(2026, 10, 6, 18, 0);
+    const past = '2026-10-06T17:00:00.000';
+    Map<String, dynamic> rec(String id, String eq, String name,
+            {String status = 'Approved', bool? waiting, String due = past}) =>
+        {
+          'transaction_id': id,
+          'student_id': 's1',
+          'borrow_date': '2026-10-06T09:00:00.000',
+          'equipment_id': eq,
+          'equipment_name': name,
+          'status': status,
+          'due_date': due,
+          'awaiting_pickup': ?waiting,
+        };
+
+    test('an approved unit still at the lab is not out, and never overdue', () {
+      final t = rec('t1', 'b1', 'Beaker 1000 mL #1', waiting: true);
+      expect(ApiService.awaitingPickup(t), isTrue);
+      expect(ApiService.isOut(t), isFalse);
+      expect(ApiService.isOverdue(t, now: now), isFalse);
+      expect(ApiService.overdueLoans([t], now: now), isEmpty);
+    });
+
+    test('a loan approved before pick-up existed counts as handed over', () {
+      final t = rec('t1', 'b1', 'Beaker 1000 mL #1');
+      expect(ApiService.isOut(t), isTrue);
+      expect(ApiService.isOverdue(t, now: now), isTrue);
+    });
+
+    test('reliability and reports do not count a waiting unit as overdue', () {
+      final txns = [
+        rec('t1', 'b1', 'Beaker 1000 mL #1', waiting: true),
+        rec('t2', 'b2', 'Beaker 1000 mL #2'),
+      ];
+      expect(ApiService.studentReliability(txns, now: now)['overdue'], 1);
+      expect(ApiService.reportMetrics(txns, now: now)['overdue'], 1);
+    });
+
+    test('groupRequests byPickup puts waiting and handed-over units apart', () {
+      final txns = [
+        rec('t1', 'b1', 'Beaker 1000 mL #1', waiting: true),
+        rec('t2', 'b2', 'Beaker 1000 mL #2'),
+      ];
+      expect(ApiService.groupRequests(txns).length, 1);
+      expect(ApiService.groupRequests(txns, byPickup: true).length, 2);
+    });
+
+    group('handOverTarget', () {
+      final request = [
+        rec('t1', 'b1', 'Beaker 1000 mL #1', waiting: true),
+        rec('t2', 'b2', 'Beaker 1000 mL #2', waiting: true),
+        rec('t3', 'f1', 'Flask 500 mL #1'), // already handed over
+      ];
+      Map<String, dynamic> unit(String id, String name) =>
+          {'equipment_id': id, 'equipment_name': name};
+
+      test('the unit set aside is handed over as itself', () {
+        expect(ApiService.handOverTarget(request, unit('b2', 'Beaker 1000 mL #2'))?['transaction_id'],
+            't2');
+      });
+
+      test('another unit of the same item takes a waiting record', () {
+        expect(ApiService.handOverTarget(request, unit('b7', 'Beaker 1000 mL #7'))?['transaction_id'],
+            't1');
+      });
+
+      test('an item the request did not ask for is refused', () {
+        expect(ApiService.handOverTarget(request, unit('m1', 'Rubber Mallet #1')), isNull);
+      });
+
+      test('a type already fully handed over has nothing left to take', () {
+        expect(ApiService.handOverTarget(request, unit('f2', 'Flask 500 mL #2')), isNull);
+      });
+    });
+
+    // Live test 2026-10-07 (U1): a request cancelled meanwhile was shown as
+    // "Everything is handed over."
+    group('handOverState', () {
+      test('something set aside is still waiting', () {
+        expect(ApiService.handOverState([
+          rec('t1', 'b1', 'Beaker 1000 mL #1', waiting: true),
+          rec('t2', 'f1', 'Flask 500 mL #1'),
+        ]), 'waiting');
+      });
+
+      test('everything in the student\'s hands is done', () {
+        expect(ApiService.handOverState([
+          rec('t1', 'b1', 'Beaker 1000 mL #1'),
+          rec('t2', 'f1', 'Flask 500 mL #1'),
+        ]), 'done');
+      });
+
+      test('a request cancelled, rejected or still Pending is over, not done', () {
+        expect(ApiService.handOverState([
+          rec('t1', 'b1', 'Beaker 1000 mL #1', status: 'Cancelled'),
+        ]), 'over');
+        expect(ApiService.handOverState([
+          rec('t1', 'b1', 'Beaker 1000 mL #1', status: 'Rejected'),
+          rec('t2', 'f1', 'Flask 500 mL #1', status: 'Returned'),
+        ]), 'over');
+        expect(ApiService.handOverState([
+          rec('t1', 'b1', 'Beaker 1000 mL #1', status: 'Pending'),
+        ]), 'over');
+      });
+
+      test('part handed over, the rest not picked up, is done', () {
+        expect(ApiService.handOverState([
+          rec('t1', 'b1', 'Beaker 1000 mL #1'),
+          rec('t2', 'f1', 'Flask 500 mL #1', status: 'Cancelled'),
+        ]), 'done');
+      });
+    });
+  });
+
   // Equipment dates (date acquired / date added), prof's comment 2026-10-05.
   group('formatDate', () {
     test('writes month name, day, year', () {
@@ -689,38 +841,190 @@ void main() {
     });
   });
 
-  // Web portal, Reports → "Download for Excel" (2026-10-05).
-  group('CSV export', () {
-    test('quotes commas, quotes and line breaks', () {
-      expect(ReportCsv.field('Smith, John'), '"Smith, John"');
-      expect(ReportCsv.field('a "b"'), '"a ""b"""');
-      expect(ReportCsv.field('line 1\nline 2'), '"line 1\nline 2"');
-      expect(ReportCsv.field(null), '');
-      expect(ReportCsv.field('Physics 1'), 'Physics 1');
+  // 2026-10-06: Reports in plain words (staff found them hard to read).
+  group('Plain statuses (loanOutcome)', () {
+    final now = DateTime(2026, 10, 6, 18, 0);
+    String o(Map<String, dynamic> t) => ApiService.loanOutcome(t, now: now);
+
+    test('each stored state reads as what happened', () {
+      expect(o({'status': 'Pending'}), 'Waiting for approval');
+      expect(o({'status': 'Rejected'}), 'Rejected');
+      expect(o({'status': 'Approved', 'awaiting_pickup': true,
+          'due_date': '2026-10-06T17:00:00'}), 'Ready for pick-up');
+      expect(o({'status': 'Approved', 'due_date': '2026-10-06T17:00:00'}), 'Overdue');
+      expect(o({'status': 'Approved', 'due_date': '2026-10-06T18:30:00'}), 'On loan');
     });
-    test('a typed value that looks like a formula stays text', () {
-      expect(ReportCsv.field('=HYPERLINK("x")'), '"\'=HYPERLINK(""x"")"');
-      expect(ReportCsv.field('+1'), "'+1");
-      expect(ReportCsv.field('-2'), "'-2");
-      expect(ReportCsv.field('@SUM(A1)'), "'@SUM(A1)");
+
+    test('a return says whether it was late', () {
+      expect(o({'status': 'Returned', 'due_date': '2026-10-06T17:00:00',
+          'return_date': Timestamp.fromDate(DateTime(2026, 10, 6, 16, 59))}), 'Returned on time');
+      expect(o({'status': 'Returned', 'due_date': '2026-10-06T17:00:00',
+          'return_date': Timestamp.fromDate(DateTime(2026, 10, 6, 17, 20))}), 'Returned late');
     });
-    test('BOM first, CRLF rows, dates in local time', () {
-      final csv = ReportCsv.transactions([
-        {
-          'borrow_date': DateTime(2026, 10, 5, 9, 7).toIso8601String(),
-          'borrower_name': 'Dela Peña, Ana',
-          'status': 'Returned',
-          'return_date': Timestamp.fromDate(DateTime(2026, 10, 5, 16, 45)),
-        },
+
+    test('a cancel says who cancelled, or that nobody came', () {
+      expect(o({'status': 'Cancelled'}), 'Cancelled by student');
+      expect(o({'status': 'Cancelled', 'cancel_reason': 'Not picked up',
+          'cancelled_by_name': 'Lab Staff'}), 'Not picked up');
+      expect(o({'status': 'Cancelled', 'cancelled_by_name': 'Lab Staff'}), 'Cancelled by staff');
+    });
+
+    // 2026-10-07: a staff cancel now gets a "Request Cancelled" alert on the
+    // student's Home; their own cancel does not.
+    test('cancelledByStaff tells a staff cancel from the student\'s own', () {
+      expect(ApiService.cancelledByStaff({'status': 'Cancelled'}), isFalse);
+      expect(ApiService.cancelledByStaff({'status': 'Cancelled',
+          'cancel_reason': 'Not picked up', 'cancelled_by_name': 'Lab Staff'}), isTrue);
+      expect(ApiService.cancelledByStaff({'status': 'Cancelled',
+          'cancelled_by_name': 'Lab Staff'}), isTrue);
+      expect(ApiService.cancelledByStaff({'status': 'Rejected',
+          'cancel_reason': 'Not picked up'}), isFalse);
+    });
+  });
+
+  group('Report summary', () {
+    final now = DateTime(2026, 10, 6, 18, 0);
+    Map<String, dynamic> rec(String sid, String at, String name, String status,
+            {Map<String, dynamic> extra = const {}}) =>
+        {'student_id': sid, 'borrow_date': at, 'equipment_name': name,
+          'status': status, 'due_date': '2026-10-06T17:00:00', ...extra};
+    final txns = [
+      // s1: two beakers, both back, one late
+      rec('s1', '2026-10-06T08:00:00', 'Beaker 1000 mL #1', 'Returned',
+          extra: {'return_date': Timestamp.fromDate(DateTime(2026, 10, 6, 16, 0))}),
+      rec('s1', '2026-10-06T08:00:00', 'Beaker 1000 mL #2', 'Returned',
+          extra: {'return_date': Timestamp.fromDate(DateTime(2026, 10, 6, 17, 30))}),
+      // s2: one flask still out past its time
+      rec('s2', '2026-10-06T09:00:00', 'Flask 500 mL #1', 'Approved'),
+      // s3: approved, waiting at the lab
+      rec('s3', '2026-10-06T10:00:00', 'Beaker 1000 mL #3', 'Approved',
+          extra: {'awaiting_pickup': true}),
+      // s4: never collected; s5: cancelled; s6: rejected; s7: waiting
+      rec('s4', '2026-10-05T10:00:00', 'Mallet #1', 'Cancelled',
+          extra: {'cancel_reason': 'Not picked up', 'cancelled_by_name': 'Staff'}),
+      rec('s5', '2026-10-05T11:00:00', 'Mallet #2', 'Cancelled'),
+      rec('s6', '2026-10-05T12:00:00', 'Mallet #3', 'Rejected'),
+      rec('s7', '2026-10-06T17:50:00', 'Mallet #4', 'Pending'),
+    ];
+    final s = ReportSummary.of(txns, days: 30, now: now, openDamage: 1,
+        equipment: const {'Available': 80, 'Reserved': 1, 'Total': 90});
+
+    test('counts requests, hand-overs, returns and the rest', () {
+      expect(s.requests, 7);
+      expect(s.itemsAsked, 8);
+      expect(s.borrowed, 3); // two returned, one out; the waiting one is not
+      expect(s.returned, 2);
+      expect(s.onTime, 1);
+      expect(s.late, 1);
+      expect(s.onTimeRate, 0.5);
+      expect(s.overdueNow, 1);
+      expect(s.readyRequests, 1);
+      expect(s.waitingRequests, 1);
+      expect(s.notPickedUp, 1);
+      expect(s.cancelledByStudents, 1);
+      expect(s.rejected, 1);
+      expect(s.mostBorrowed, {'Beaker 1000 mL': 2, 'Flask 500 mL': 1});
+    });
+
+    test('At a glance says it in sentences', () {
+      expect(s.glance, [
+        'Students sent 7 requests for 8 items, and 3 items were handed over to them.',
+        '2 items came back: 1 on time and 1 late (50% on time).',
+        '1 item is overdue right now. Penalties & Holds lists who has them.',
+        '1 approved request is waiting at the lab to be picked up.',
+        '1 request is waiting for approval.',
+        'Not borrowed after all: 1 not picked up, 1 cancelled by students, 1 rejected (requests).',
+        '1 damage report is still open.',
       ]);
-      expect(csv.startsWith('﻿Requested,Student,'), isTrue);
-      final rows = csv.substring(1).split('\r\n');
-      expect(rows, hasLength(3)); // header, the record, '' after the last CRLF
-      expect(','.allMatches(rows[0]).length,
-          ReportCsv.transactionColumns.length - 1);
-      expect(rows[1], startsWith('2026-10-05 09:07,"Dela Peña, Ana",,'));
-      expect(rows[1], contains(',Returned,,2026-10-05 16:45,'));
-      expect(rows[2], isEmpty);
+    });
+
+    // Found on the live data: an overdue loan sent before the period read as
+    // "Nothing is overdue" while the Dashboard counted it.
+    test('"right now" figures come from every open request, not just the period', () {
+      final old = rec('s9', '2026-08-26T09:00:00', 'Keyboard', 'Approved',
+          extra: {'due_date': '2026-08-26T17:00:00'});
+      final withOpen = ReportSummary.of(txns, days: 30, now: now,
+          open: [...txns.where((t) => t['status'] == 'Pending' || t['status'] == 'Approved'), old]);
+      expect(withOpen.overdueNow, 2);
+      expect(withOpen.readyRequests, 1);
+      expect(withOpen.waitingRequests, 1);
+      expect(withOpen.borrowed, 3); // period figures unchanged
+    });
+
+    test('an empty period says so instead of a row of zeros', () {
+      final empty = ReportSummary.of(const [], days: 7, now: now);
+      expect(empty.glance.first, 'No requests were sent in the last 7 days.');
+      expect(empty.onTimeRate, 0);
+    });
+  });
+
+  group('Excel workbook', () {
+    test('columns are lettered like Excel', () {
+      expect([0, 25, 26, 51, 52].map(Xlsx.column), ['A', 'Z', 'AA', 'AZ', 'BA']);
+    });
+
+    test('dates are real Excel dates', () {
+      expect(Xlsx.serial(DateTime(1900, 3, 1)), 61);
+      expect(Xlsx.serial(DateTime(2000, 1, 1)), 36526);
+      expect(Xlsx.serial(DateTime(2000, 1, 1, 18)), 36526.75);
+    });
+
+    test('text is escaped and a formula-looking value stays text', () {
+      final xml = Xlsx.sheetXml(const XSheet('S', [
+        [XCell('Tom & "Jerry" <3'), XCell('=HYPERLINK("x")'), XCell(5), XCell(null)],
+      ]));
+      expect(xml, contains('Tom &amp; &quot;Jerry&quot; &lt;3'));
+      expect(xml, contains('<c r="B1" t="inlineStr"><is><t xml:space="preserve">=HYPERLINK'));
+      expect(xml, contains('<c r="C1"><v>5</v></c>'));
+      expect(xml, isNot(contains('<f>')));
+    });
+
+    test('the report has a Summary sheet and a records sheet with plain statuses', () {
+      final now = DateTime(2026, 10, 6, 18, 0);
+      final txns = [
+        {
+          'student_id': 's1', 'borrow_date': '2026-10-06T08:00:00',
+          'borrower_name': 'Dela Peña, Ana', 'equipment_name': 'Beaker 1000 mL #1',
+          'qr_code': 'GLS-000001', 'status': 'Returned', 'due_date': '2026-10-06T17:00:00',
+          'return_date': Timestamp.fromDate(DateTime(2026, 10, 6, 17, 30)),
+        },
+      ];
+      final s = ReportSummary.of(txns, days: 30, now: now);
+      final bytes = ReportXlsx.build(s, txns, generatedBy: 'Lab Staff', now: now);
+      final zip = ZipDecoder().decodeBytes(bytes);
+      String part(String name) => utf8.decode(zip.findFile(name)!.content);
+
+      expect(zip.findFile('[Content_Types].xml'), isNotNull);
+      expect(part('xl/workbook.xml'), contains('<sheet name="Summary"'));
+      expect(part('xl/workbook.xml'), contains('<sheet name="Borrowing records"'));
+      final records = part('xl/worksheets/sheet2.xml');
+      for (final c in ReportXlsx.recordColumns) {
+        expect(records, contains('>$c<'));
+      }
+      expect(records, contains('Returned late'));
+      expect(records, contains('Dela Peña, Ana'));
+      expect(records, contains('state="frozen"'));
+      expect(records, contains('<autoFilter ref="A1:P2"/>'));
+      expect(part('xl/worksheets/sheet1.xml'), contains('What it means'));
+      expect(ReportXlsx.fileName(s), 'labtrack-report-2026-10-06-last-30-days.xlsx');
+    });
+  });
+
+  group('QR labels', () {
+    test('21 labels to an A4 sheet', () {
+      expect([0, 1, 21, 22, 90].map(QrLabels.pages), [0, 1, 1, 2, 5]);
+    });
+
+    test('text the PDF font cannot draw is made plain', () {
+      expect(QrLabels.pdfSafe('Gauge – 2 µm “A” ‘b’ … ✓'), 'Gauge - 2 µm "A" \'b\' ... ?');
+    });
+
+    test('builds a PDF, leaving out items with no code', () async {
+      final bytes = await QrLabels.build([
+        {'equipment_name': 'Beaker 1000 mL #1', 'qr_code': 'GLS-000001'},
+        {'equipment_name': 'No code yet', 'qr_code': ''},
+      ]);
+      expect(String.fromCharCodes(bytes.take(5)), '%PDF-');
     });
   });
 }

@@ -16,14 +16,18 @@ import '../../services/api_service.dart';
 import '../../services/session.dart';
 import '../../theme.dart';
 import '../../widgets/common.dart';
+import 'loan_card.dart' show changeReturnTime;
 
 class PendingRequestCard extends StatefulWidget {
   // The records of one request (see ApiService.groupRequests).
   final List<dynamic> request;
   final Future<void> Function() onApprove;
   final Future<void> Function() onReject;
+  // After the return time is changed (the Dashboard reloads its list).
+  final VoidCallback? onChanged;
   const PendingRequestCard(
-      {super.key, required this.request, required this.onApprove, required this.onReject});
+      {super.key, required this.request, required this.onApprove, required this.onReject,
+      this.onChanged});
 
   @override
   State<PendingRequestCard> createState() => _PendingRequestCardState();
@@ -118,9 +122,32 @@ class _PendingRequestCardState extends State<PendingRequestCard> {
         // Why, and until when.
         if (subject.isNotEmpty) _line(Icons.menu_book_outlined, 'Subject: $subject'),
         if (purpose.isNotEmpty) _line(Icons.notes_rounded, 'Purpose: $purpose'),
+        // Staff can give a later time than the student asked for (5:00 PM
+        // is the usual latest, 2026-10-06).
         if (due != null)
-          _line(Icons.timer_outlined,
-              'Return by ${TimeOfDay.fromDateTime(due).format(context)}, ${formatDate(due)}'),
+          Row(children: [
+            Expanded(
+              child: _line(Icons.timer_outlined,
+                  'Return by ${TimeOfDay.fromDateTime(due).format(context)}, ${formatDate(due)}'),
+            ),
+            if (Session.canManage)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: TextButton(
+                  onPressed: _busy != null
+                      ? null
+                      : () async {
+                          if (await changeReturnTime(context, request)) {
+                            widget.onChanged?.call();
+                          }
+                        },
+                  style: TextButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.symmetric(horizontal: 8)),
+                  child: const Text('Change'),
+                ),
+              ),
+          ]),
 
         if (Session.canManage) ...[
           const SizedBox(height: 12),

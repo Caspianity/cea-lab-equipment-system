@@ -33,13 +33,10 @@ class _AdminPenaltiesScreenState extends State<AdminPenaltiesScreen> {
     setState(() => _loading = true);
     try {
       final held = await ApiService.getHeldStudents();
-      final reqs = await ApiService.getRequests();
-      final now = DateTime.now();
-      final overdue = reqs.where((e) {
-        if (e['status'] != 'Approved') return false;
-        final due = DateTime.tryParse('${e['due_date']}'.replaceAll(' ', 'T'));
-        return due != null && due.isBefore(now);
-      }).toList();
+      // Only approved records can be overdue, so only those are read; and an
+      // approved item still waiting at the lab is not overdue (2026-10-06).
+      final reqs = await ApiService.getRequests(status: 'Approved');
+      final overdue = ApiService.overdueLoans(reqs);
       if (!mounted) return;
       setState(() { _held = held; _overdue = overdue; _loading = false; });
     } catch (_) {

@@ -105,7 +105,9 @@ class _NotificationsSettingsScreenState extends State<NotificationsSettingsScree
             ),
             _notifTile(
               title: 'Request Rejected',
-              subtitle: 'When staff rejects your borrow request',
+              // Also staff cancelling an approved request nobody picked up
+              // (2026-10-07).
+              subtitle: 'When staff rejects or cancels your borrow request',
               value: _borrowRejected,
               onChanged: (v) => setState(() => _borrowRejected = v),
               activeColor: AppTheme.danger,

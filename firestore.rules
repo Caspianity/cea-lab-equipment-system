@@ -206,13 +206,58 @@ service cloud.firestore {
               || staffRoleOk(request.resource.data.role)));
     }
 
-    // Equipment is readable by any signed-in user; only managers may change it.
+    // Equipment is readable by any signed-in user; only managers may change it,
+    // with two narrow exceptions for students (2026-10-06, reservations):
+    //   • the batch that sends a request marks each requested unit Reserved, so
+    //     no one else can ask for it while staff decide. Allowed only from
+    //     Available, only for a Pending request of the caller's that names this
+    //     unit (read after the batch), and only the reservation fields change;
+    //   • cancelling that request frees the unit again: Reserved back to
+    //     Available, only by the student who reserved it, and only when the
+    //     request it names ends up Cancelled.
+    // Each student check reads one document (the request, as the batch leaves
+    // it), and only once everything cheaper has passed. The student checks
+    // come before isManager() so a student's batch never spends a read on
+    // the staff list: an 8-unit request then needs 17 reads (the profile, and
+    // the unit and its request for each unit), inside the 20 a batch may use.
     // The small list thumbnail is stored on the document itself as photo_thumb.
     match /equipment/{id} {
       allow read:   if signedIn();
       allow create: if isManager();
-      allow update: if isManager();
+      allow update: if studentReserveOk() || studentReleaseOk() || isManager();
       allow delete: if isManager();
+
+      function reservationOnly() {
+        return request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['status', 'reserved_tx', 'reserved_by']);
+      }
+      // The request [txId] once this batch is applied: the caller's, about
+      // this unit, and in [status].
+      function myRequestIs(txId, status) {
+        let t = getAfter(/databases/$(database)/documents/borrow_transactions/$(txId)).data;
+        return t.student_id == request.auth.uid
+          && t.equipment_id == id
+          && t.status == status;
+      }
+      function studentReserveOk() {
+        return signedIn()
+          && reservationOnly()
+          && resource.data.status == 'Available'
+          && request.resource.data.status == 'Reserved'
+          && request.resource.data.reserved_by == request.auth.uid
+          && request.resource.data.reserved_tx is string
+          && myRequestIs(request.resource.data.reserved_tx, 'Pending');
+      }
+      function studentReleaseOk() {
+        return signedIn()
+          && reservationOnly()
+          && resource.data.status == 'Reserved'
+          && resource.data.reserved_by == request.auth.uid
+          && request.resource.data.status == 'Available'
+          && !('reserved_tx' in request.resource.data)
+          && !('reserved_by' in request.resource.data)
+          && myRequestIs(resource.data.reserved_tx, 'Cancelled');
+      }
     }
 
     // Full-size equipment photos, one document per equipment item, keyed by the
@@ -272,8 +317,20 @@ service cloud.firestore {
         && request.resource.data.purpose.size() <= 2000
         && borrowerOk()
         && equipmentOk();
-      allow update: if isManager();
+      // Staff decide; a student may only cancel their own request while it is
+      // still Pending (2026-10-06), and nothing else about it.
+      allow update: if studentCancelOk() || isManager();
       allow delete: if false;
+
+      function studentCancelOk() {
+        return signedIn()
+          && resource.data.student_id == request.auth.uid
+          && resource.data.status == 'Pending'
+          && request.resource.data.status == 'Cancelled'
+          && request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(['status', 'cancelled_at'])
+          && request.resource.data.cancelled_at == request.time;
+      }
 
       // The requester: not on hold, past the e-mail gate, and named on the
       // request exactly as their own profile names them.

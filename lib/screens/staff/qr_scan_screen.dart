@@ -13,6 +13,7 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../../services/api_service.dart';
 import '../../theme.dart';
+import 'hand_over_screen.dart';
 import 'return_flow.dart';
 
 // ─── QR Scan Screen (Admin — Return Processing) ───────────────────────────────
@@ -57,7 +58,7 @@ class _QRScanScreenState extends State<QRScanScreen> {
 
   Widget _returnDesk() {
     return Scaffold(
-      appBar: AppBar(title: const Text('Process a Return')),
+      appBar: AppBar(title: const Text('Hand Over or Return')),
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 480),
@@ -134,10 +135,28 @@ class _QRScanScreenState extends State<QRScanScreen> {
 
     try {
       final res = await ApiService.getEquipmentByQr(code);
+      // A unit set aside for a student who has come to collect it is handed
+      // over, not returned (2026-10-06).
+      var waiting = const <dynamic>[];
+      if (res['success'] == true &&
+          (res['data'] as Map<String, dynamic>)['status'] == 'Borrowed') {
+        waiting = await ApiService.awaitingRequestFor(
+            '${(res['data'] as Map<String, dynamic>)['equipment_id']}');
+      }
       if (!mounted) return;
       Navigator.pop(context); // close loading
 
-      if (res['success'] == true) {
+      if (res['success'] == true && waiting.isNotEmpty) {
+        // One camera at a time: the hand-over screen opens its own.
+        try { await _controller.stop(); } catch (_) {}
+        if (!mounted) return;
+        await Navigator.push(context, MaterialPageRoute(
+            builder: (_) => HandOverScreen(request: waiting, firstCode: code)));
+        if (_useCamera) {
+          try { await _controller.start(); } catch (_) {}
+        }
+        if (mounted) setState(() => _scanning = true);
+      } else if (res['success'] == true) {
         final equipment = res['data'] as Map<String, dynamic>;
         await showReturnSheet(
           context,
@@ -231,7 +250,7 @@ class _QRScanScreenState extends State<QRScanScreen> {
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
-        title: const Text('Scan QR — Process Return'),
+        title: const Text('Scan QR — Hand Over or Return'),
         backgroundColor: Colors.black,
         // A computer's camera has no torch; offer the way back to typing.
         actions: kIsWeb ? [
@@ -273,7 +292,7 @@ class _QRScanScreenState extends State<QRScanScreen> {
               // Unconstrained, this line ran off the edge on a narrow screen
               // (QA 2026-09-19, low #12). Side insets plus a centred wrap keep
               // it on-screen at any width.
-              child: const Text('Scan equipment QR code to process return',
+              child: const Text('Scan an item to hand it over or to take it back',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: Colors.white70, fontSize: 13)),
             ),
