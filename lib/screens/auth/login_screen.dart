@@ -41,7 +41,9 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   // Restore the "remember me" choice and the saved identifier (never the
-  // password) so a returning user finds their student number / email pre-filled.
+  // password) so a returning user finds their email pre-filled. A student
+  // number saved before 2026-10-13, when students could sign in with it, is
+  // left out: only an email signs in now.
   Future<void> _loadRemembered() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -52,7 +54,7 @@ class _LoginScreenState extends State<LoginScreen> {
       setState(() {
         _rememberMe = remember;
         // On the web, only a saved staff sign-in is restored.
-        if (remember && savedId.isNotEmpty && (!kIsWeb || !savedIsStudent)) {
+        if (remember && savedId.contains('@') && (!kIsWeb || !savedIsStudent)) {
           _isStudent = !kIsWeb && savedIsStudent;
           _identifierCtrl.text = savedId;
         }
@@ -92,8 +94,12 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _forgotPassword() async {
-    final emailCtrl = TextEditingController(
-        text: _isStudent ? '' : _identifierCtrl.text.trim());
+    // Both tabs sign in with an email (students since 2026-10-13), so the
+    // address already typed is offered for the reset. It used to be left out
+    // on the Student tab, where the field could hold a student number.
+    final typed = _identifierCtrl.text.trim();
+    final emailCtrl =
+        TextEditingController(text: typed.contains('@') ? typed : '');
     final email = await showDialog<String>(
       context: context,
       builder: (dialogCtx) => AlertDialog(
@@ -366,30 +372,26 @@ class _LoginScreenState extends State<LoginScreen> {
                           style: const TextStyle(
                               color: AppTheme.textMid, fontSize: 14)),
                       const SizedBox(height: 24),
-                      Text(
-                          _isStudent ? 'Student ID / Email' : 'Email Address',
-                          style: const TextStyle(
+                      // Students and staff both sign in with their email
+                      // (students used a student number until 2026-10-13).
+                      const Text('Email Address',
+                          style: TextStyle(
                               fontSize: 13,
                               fontWeight: FontWeight.w600,
                               color: AppTheme.textDark)),
                       const SizedBox(height: 8),
                       TextFormField(
                         controller: _identifierCtrl,
-                        keyboardType: _isStudent
-                            ? TextInputType.text
-                            : TextInputType.emailAddress,
+                        keyboardType: TextInputType.emailAddress,
                         // The keyboard key moves on to the password (it was
                         // "Done", which only closed the keyboard; QA 2026-10-06).
                         textInputAction: TextInputAction.next,
                         autocorrect: false,
                         decoration: InputDecoration(
                           hintText: _isStudent
-                              ? 'e.g. 26-12345-123'
+                              ? 'name@neu.edu.ph'
                               : 'staff@neu.edu.ph',
-                          prefixIcon: Icon(
-                              _isStudent
-                                  ? Icons.person_outline_rounded
-                                  : Icons.email_outlined,
+                          prefixIcon: const Icon(Icons.email_outlined,
                               color: AppTheme.textMid),
                         ),
                       ),

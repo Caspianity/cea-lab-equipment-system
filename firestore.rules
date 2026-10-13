@@ -81,10 +81,16 @@ service cloud.firestore {
         || p.created_at < timestamp.date(2026, 8, 3);
     }
 
-    // Public lookup so a student can resolve their student number → email
-    // BEFORE authenticating. Holds only {email, uid}. Hardened:
-    //   • get-only — list is blocked so the collection cannot be dumped to
-    //     harvest student emails (Data Privacy Act of 2012 consideration).
+    // Student number → account index. Holds only {email, uid}. Its job is to
+    // make a student number registrable once: registration CREATES the entry,
+    // and a create on a taken number is refused. Hardened:
+    //   • nobody reads it from a client (2026-10-13, pen test R3). It used to
+    //     be readable one entry at a time, before sign-in, because students
+    //     signed in with their student number and the app resolved it to an
+    //     email here. That let anyone turn a guessed number into a student's
+    //     email (Data Privacy Act of 2012 consideration). Students now sign in
+    //     with their email, so no read is needed; the rules' own getAfter()
+    //     below is not a client read and still works.
     //   • create must carry the caller's own uid and token email, so one
     //     account cannot "squat" another student's number.
     //   • ONE number per account, and only the number on the caller's own
@@ -100,7 +106,7 @@ service cloud.firestore {
     //     only ever for rolling back a half-finished registration, and the
     //     batch makes that impossible: both writes land or neither does.
     match /student_lookup/{studentNumber} {
-      allow get:    if true;
+      allow get:    if false;
       allow list:   if false;
       allow create: if signedIn()
         && request.resource.data.keys().hasOnly(['email', 'uid'])

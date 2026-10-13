@@ -52,6 +52,13 @@ const bool kDemoMode = false;
 // ─────────────────────────────────────────────────────────────────────────────
 final DateTime kLegacyAccountCutoff = DateTime.utc(2026, 8, 3);
 
+// What a student sees after typing a student number into the login field.
+// Students sign in with their email since 2026-10-13 (see login()). The demo
+// accounts do too: login never checks the address's domain, and the
+// grandfather clause above still lets them skip verification.
+const String kStudentIdLoginMessage =
+    'Sign in with your email address, not your student ID.';
+
 /// True if [profile] belongs to an account created before demo mode was closed.
 bool _isLegacyAccount(Map<String, dynamic>? profile) {
   final ts = profile?['created_at'];
@@ -131,25 +138,15 @@ class ApiService {
       String identifier, String password, String role) async {
     try {
       if (role == 'student') {
-        // The field is labelled "Student ID / Email", so both have to work. An
-        // address used to be sent to the lookup index and bounce with "Student
-        // ID not found." (QA 2026-09-19, M7); anything containing '@' is now
-        // taken as the e-mail itself and skips the lookup.
-        String email;
-        if (identifier.contains('@')) {
-          email = identifier;
-        } else {
-          // Students sign in with their student number. Resolve it to an email
-          // via the public lookup index — this works BEFORE authentication,
-          // unlike a query on the protected `students` collection (see
-          // firestore.rules).
-          final lookup =
-              await _db.collection('student_lookup').doc(identifier).get();
-          if (!lookup.exists) {
-            return {'success': false, 'message': 'Student ID not found.'};
-          }
-          email = lookup.data()!['email'] as String;
+        // Students sign in with their email (2026-10-13). A student number
+        // used to work too, resolved to the email through a lookup index that
+        // anyone could read before signing in, which let a guessed number
+        // reveal a student's email (pen test R3). The index is closed now, so
+        // a number gets a plain answer instead of a permission error.
+        if (!identifier.contains('@')) {
+          return {'success': false, 'message': kStudentIdLoginMessage};
         }
+        final email = identifier;
         await _auth.signInWithEmailAndPassword(email: email, password: password);
         final uid = _auth.currentUser!.uid;
         // Profile is read BEFORE the verification gate: the grandfather check
@@ -320,16 +317,16 @@ class ApiService {
         await batch.commit();
       } on FirebaseException catch (e) {
         if (e.code != 'permission-denied') rethrow;
-        // Refused. The usual reason is a number someone already registered,
-        // but the rules also check the profile itself, so only say "already
-        // registered" when that is actually true.
+        // Refused. The form already checks everything else the rules check
+        // (NEU address, name, course, number format), so the usual reason is
+        // a number someone already registered. The lookup index can no longer
+        // be read to confirm that (2026-10-13, pen test R3), so say it as
+        // the likely reason rather than a certainty.
         await cred.user!.delete();
-        final taken = await lookupRef.get().then((d) => d.exists, onError: (_) => false);
         return {
           'success': false,
-          'message': taken
-              ? 'Student ID is already registered.'
-              : 'Registration was refused. Please check your details and try again.',
+          'message': 'Registration was refused. This student ID may already '
+              'be registered. If it is yours, please ask the laboratory staff.',
         };
       }
 

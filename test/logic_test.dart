@@ -1246,4 +1246,15 @@ void main() {
       expect(empty.asText(), contains('No requests in this period.'));
     });
   });
+
+  // 2026-10-13 (pen test R3): students sign in with their email only. A
+  // student number is answered before Firebase is touched, so this needs no
+  // connection.
+  group('Student login', () {
+    test('a student number is refused with a plain message', () async {
+      final res = await ApiService.login('26-12345-222', 'secret', 'student');
+      expect(res['success'], isFalse);
+      expect(res['message'], kStudentIdLoginMessage);
+    });
+  });
 }

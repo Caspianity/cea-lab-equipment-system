@@ -399,4 +399,31 @@ void main() {
     expect(find.text('Sign In'), findsOneWidget);
     expect(find.text('Forgot password?'), findsOneWidget);
   });
+
+  // 2026-10-13: the student tab asks for an email, and a student number saved
+  // by "remember me" in an older version is not pre-filled.
+  testWidgets('Login asks students for an email, not a student ID', (tester) async {
+    SharedPreferences.setMockInitialValues({
+      'remember_me': true,
+      'saved_identifier': '26-12345-222',
+      'saved_is_student': true,
+    });
+    await tester.pumpWidget(const MaterialApp(home: LoginScreen()));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Email Address'), findsOneWidget);
+    expect(find.text('Student ID / Email'), findsNothing);
+    expect(find.text('name@neu.edu.ph'), findsOneWidget);
+    expect(find.text('26-12345-222'), findsNothing);
+
+    // Forgot password offers the email already typed (QA 2026-10-13: the
+    // Student tab used to open it empty).
+    await tester.enterText(find.byType(TextFormField).first, 'ce.demo@gmail.com');
+    await tester.ensureVisible(find.text('Forgot password?'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Forgot password?'));
+    await tester.pumpAndSettle();
+    expect(find.text('Reset Password'), findsOneWidget);
+    expect(find.text('ce.demo@gmail.com'), findsNWidgets(2));
+  });
 }
