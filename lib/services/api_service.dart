@@ -438,6 +438,7 @@ class ApiService {
       // cannot keep acting as the signed-in user.
     }
     Session.clear();
+    forgetItemTypes();
   }
 
   // ── Equipment ─────────────────────────────────────────────────────────────
@@ -682,13 +683,26 @@ class ApiService {
         : equipmentStatusForCondition(condition);
     final saved = <Map<String, dynamic>>[];
     try {
+      final keepList = await _keepingTypeList();
       for (var i = 0; i < units.length; i += 8) {
         final batch = _db.batch();
         final part = <Map<String, dynamic>>[];
+        final deltas = <Map<String, Map<String, dynamic>>>[];
         for (final unit in units.skip(i).take(8)) {
           final ref = _db.collection('equipment').doc();
+          final courses = (data['courses'] as List?)?.cast<String>() ?? <String>[];
+          // The type list follows every unit written (1.0.19), in the same
+          // batch: 8 units + the list stay inside a batch's 20 rule reads.
+          deltas.add(typeDelta(null, {
+            'equipment_name': unit['equipment_name'],
+            'status':         status,
+            'category':       data['category'],
+            'location':       data['location'] ?? '',
+            'courses':        courses,
+          }));
           batch.set(ref, {
             'equipment_name': unit['equipment_name'],
+            'type_name':      baseNameOf(unit['equipment_name'] ?? ''),
             'category':       data['category'],
             'location':       data['location'] ?? '',
             'qr_code':        unit['qr_code'],
@@ -714,9 +728,11 @@ class ApiService {
           });
           part.add({...unit, 'equipment_id': ref.id});
         }
+        if (keepList) _addTypeWrite(batch, mergeTypeDeltas(deltas));
         await batch.commit();
         saved.addAll(part);
       }
+      forgetItemTypes();
       return {'success': true, 'units': saved, 'status': status};
     } catch (e) {
       return {
@@ -737,6 +753,10 @@ class ApiService {
       // refused to complete either, stranding both (QA 2026-09-19, M5).
       final status = data['status'] as String?;
       var endReservation = false;
+      final eqRef = _db.collection('equipment').doc(equipmentId);
+      // The unit as it is now: for the reservation check below and for the
+      // type list, which follows a new name, status, category or program.
+      final cur = (await eqRef.get()).data();
       if (status != null && status != 'Borrowed') {
         // Single-field query (no composite index needed); filter in Dart.
         final snap = await _db
@@ -760,7 +780,6 @@ class ApiService {
         // reservation until staff decide the request or the student cancels
         // it (2026-10-06). A reservation whose request is already over (an
         // older app version decided it) just ends here.
-        final cur = (await _db.collection('equipment').doc(equipmentId).get()).data();
         if (cur?['status'] == 'Reserved' && status != 'Reserved') {
           final holder = snap.docs.where((d) =>
               d.id == '${cur?['reserved_tx']}' && d.data()['status'] == 'Pending');
@@ -788,7 +807,20 @@ class ApiService {
       if (acquired is DateTime) {
         fields['date_acquired'] = Timestamp.fromDate(acquired);
       }
-      await _db.collection('equipment').doc(equipmentId).update(fields);
+      final batch = _db.batch();
+      if (cur != null) {
+        // The unit as it will be, for the type list (1.0.19).
+        final after = {
+          ...cur,
+          for (final k in ['equipment_name', 'status', 'category', 'location', 'courses'])
+            if (data.containsKey(k)) k: data[k],
+        };
+        fields['type_name'] = baseNameOf('${after['equipment_name'] ?? ''}');
+        if (await _keepingTypeList()) _addTypeWrite(batch, typeDelta(cur, after));
+      }
+      batch.update(eqRef, fields);
+      await batch.commit();
+      forgetItemTypes();
       return {'success': true};
     } catch (e) {
       return {'success': false, 'message': friendlyError(e)};
@@ -813,7 +845,13 @@ class ApiService {
           'message': 'Cannot delete: this equipment has a pending or active loan.'
         };
       }
-      await _db.collection('equipment').doc(equipmentId).delete();
+      // The unit leaves the type list in the same batch (1.0.19).
+      final eqRef = _db.collection('equipment').doc(equipmentId);
+      final cur = (await eqRef.get()).data();
+      final batch = _db.batch()..delete(eqRef);
+      if (cur != null && await _keepingTypeList()) _addTypeWrite(batch, typeDelta(cur, null));
+      await batch.commit();
+      forgetItemTypes();
       // Best-effort cleanup of the full-size photo; ignore if there is none.
       try {
         await _db.collection('equipment_photos').doc(equipmentId).delete();
@@ -1027,24 +1065,27 @@ class ApiService {
     }
   }
 
-  // The item types a student can borrow right now, for the borrow form's
-  // picker: every Available unit, grouped by type, with how many are free.
-  // One read per available unit. At the lab's size (90 units on 2026-10-05)
-  // that is simpler than paging a grouped list; if the inventory grows into
-  // the thousands, keep a per-type count instead.
+  // The item types a student can borrow right now: every Available unit,
+  // grouped by type, with how many are free. One read per available unit,
+  // which was fine at 90 units (2026-10-05) and is not at 1,067 (2026-10-15):
+  // since 1.0.19 the screens use the item-type list below and come here only
+  // until that list has been built.
   static Future<List<Map<String, dynamic>>> getAvailableTypes() async {
     final snap = await _db
         .collection('equipment')
         .where('status', isEqualTo: 'Available')
         .get();
     final types = <String, Map<String, dynamic>>{};
+    final unitsOf = <String, List<Map<String, dynamic>>>{};
     for (final d in snap.docs) {
       final data = d.data();
       final base = baseNameOf('${data['equipment_name'] ?? ''}');
       if (base.isEmpty) continue;
+      unitsOf.putIfAbsent(base, () => []).add(data);
       final t = types.putIfAbsent(base, () => {
             'name':     base,
             'category': data['category'] ?? '',
+            'location': data['location'] ?? '',
             'count':    0,
           });
       t['count'] = (t['count'] as int) + 1;
@@ -1053,9 +1094,462 @@ class ApiService {
         t['photo_thumb'] = data['photo_thumb'];
       }
     }
+    for (final e in types.entries) {
+      e.value['courses'] = typeCourses(unitsOf[e.key]!);
+    }
     return types.values.toList()
       ..sort((a, b) =>
           '${a['name']}'.toLowerCase().compareTo('${b['name']}'.toLowerCase()));
+  }
+
+  // ── Item types (1.0.19, 2026-10-15) ──────────────────────────────────────
+  // With 1,067 units the borrow form read every Available unit (~945) each
+  // time its item list opened, and a search read the whole collection, so the
+  // free plan's 50,000 reads a day would have covered about 25 requests. Now
+  // one record, equipment_types/all, lists every item TYPE with how many units
+  // it has and how many are out of service. Students read that one record for
+  // the catalog and the item list, and count one type's Available units (one
+  // read) only when they pick it. Only staff write the record, in the same
+  // batch as the unit change it follows, so no student action touches it, and
+  // availability is never stored, only counted.
+  //   types.<type name> = {category, location, courses, units, out}
+  //   complete          = true once rebuildItemTypes has written it; until
+  //                       then the screens read units the old way.
+  // Every unit also carries type_name (its base name), so "the units of a
+  // type" is an equality query.
+
+  static DocumentReference<Map<String, dynamic>> get _typesRef =>
+      _db.collection('equipment_types').doc('all');
+
+  // Under Repair and For Disposal units cannot be lent; every other status
+  // (Available, Reserved, Borrowed) is in service.
+  static bool isOutOfService(String? status) =>
+      status == 'Under Repair' || status == 'For Disposal';
+
+  static List<String> _strings(dynamic list) =>
+      (list as List?)?.map((c) => '$c').toList() ?? <String>[];
+
+  // A type's programs: every program its units name, in the usual order, or
+  // none (open to every program, as for a single unit) when any unit names
+  // none. Pure, so it is unit-tested.
+  static List<String> typeCourses(Iterable<Map<String, dynamic>> units) {
+    final all = <String>{};
+    for (final u in units) {
+      final cs = _strings(u['courses']);
+      if (cs.isEmpty) return <String>[];
+      all.addAll(cs);
+    }
+    return [
+      ...kCourses.where(all.contains),
+      ...all.where((c) => !kCourses.contains(c)),
+    ];
+  }
+
+  // The type list for [units], as rebuildItemTypes stores it. A type's
+  // category and location are the ones most of its units have. Pure, so it
+  // is unit-tested.
+  static Map<String, Map<String, dynamic>> buildTypeIndex(
+      Iterable<Map<String, dynamic>> units) {
+    final groups = <String, List<Map<String, dynamic>>>{};
+    for (final u in units) {
+      final type = baseNameOf('${u['equipment_name'] ?? ''}');
+      if (type.isEmpty) continue;
+      groups.putIfAbsent(type, () => []).add(u);
+    }
+    String mostCommon(List<Map<String, dynamic>> us, String field) {
+      final counts = <String, int>{};
+      for (final u in us) {
+        final v = '${u[field] ?? ''}'.trim();
+        if (v.isNotEmpty) counts[v] = (counts[v] ?? 0) + 1;
+      }
+      if (counts.isEmpty) return '';
+      final keys = counts.keys.toList()
+        ..sort((a, b) {
+          final byCount = counts[b]!.compareTo(counts[a]!);
+          return byCount != 0 ? byCount : a.compareTo(b);
+        });
+      return keys.first;
+    }
+
+    return {
+      for (final e in groups.entries)
+        e.key: {
+          'category': mostCommon(e.value, 'category'),
+          'location': mostCommon(e.value, 'location'),
+          'courses':  typeCourses(e.value),
+          'units':    e.value.length,
+          'out': e.value.where((u) => isOutOfService('${u['status']}')).length,
+        },
+    };
+  }
+
+  // The stored list as the screens use it: one map per type, by name, with
+  // in_service = units that can be lent at all. Types with no units left are
+  // dropped (a delete leaves a zero until the next rebuild). Pure.
+  static List<Map<String, dynamic>> typeListFrom(Map<String, dynamic>? types) {
+    final list = <Map<String, dynamic>>[];
+    (types ?? const <String, dynamic>{}).forEach((name, v) {
+      if (v is! Map) return;
+      final units = (v['units'] as num?)?.toInt() ?? 0;
+      if (units <= 0) return;
+      var out = (v['out'] as num?)?.toInt() ?? 0;
+      if (out < 0) out = 0;
+      if (out > units) out = units;
+      list.add({
+        'name':       name,
+        'category':   '${v['category'] ?? ''}',
+        'location':   '${v['location'] ?? ''}',
+        'courses':    _strings(v['courses']),
+        'units':      units,
+        'out':        out,
+        'in_service': units - out,
+      });
+    });
+    list.sort((a, b) =>
+        '${a['name']}'.toLowerCase().compareTo('${b['name']}'.toLowerCase()));
+    return list;
+  }
+
+  // How one unit's change moves the type list. [before] and [after] are the
+  // unit as it was and as it will be (equipment_name, status, category,
+  // location, courses); null for a new or a deleted unit. Returns, per type,
+  // the change in `units` and `out`, and the category, location and programs
+  // of the type the unit ends up in where they are new or changed. Pure, so
+  // it is unit-tested.
+  static Map<String, Map<String, dynamic>> typeDelta(
+      Map<String, dynamic>? before, Map<String, dynamic>? after) {
+    final delta = <String, Map<String, dynamic>>{};
+    String typeOf(Map<String, dynamic> u) => baseNameOf('${u['equipment_name'] ?? ''}');
+    void count(Map<String, dynamic> unit, int sign) {
+      final type = typeOf(unit);
+      if (type.isEmpty) return;
+      final d = delta.putIfAbsent(type, () => {'units': 0, 'out': 0});
+      d['units'] = (d['units'] as int) + sign;
+      if (isOutOfService('${unit['status']}')) d['out'] = (d['out'] as int) + sign;
+    }
+
+    if (before != null) count(before, -1);
+    if (after != null) {
+      count(after, 1);
+      final type = typeOf(after);
+      if (type.isNotEmpty) {
+        final d = delta[type]!;
+        final moved = before == null || typeOf(before) != type;
+        for (final field in ['category', 'location']) {
+          if (!after.containsKey(field)) continue;
+          final v = '${after[field] ?? ''}'.trim();
+          if (moved || v != '${before[field] ?? ''}'.trim()) d[field] = v;
+        }
+        if (after.containsKey('courses')) {
+          final v = _strings(after['courses']);
+          if (moved || v.join('|') != _strings(before['courses']).join('|')) {
+            d['courses'] = v;
+          }
+        }
+      }
+    }
+    return delta;
+  }
+
+  // Several typeDelta results as one: counts add up, the last attributes win.
+  static Map<String, Map<String, dynamic>> mergeTypeDeltas(
+      Iterable<Map<String, Map<String, dynamic>>> deltas) {
+    final merged = <String, Map<String, dynamic>>{};
+    for (final d in deltas) {
+      d.forEach((type, change) {
+        final m = merged.putIfAbsent(type, () => {'units': 0, 'out': 0});
+        change.forEach((k, v) {
+          if (k == 'units' || k == 'out') {
+            m[k] = (m[k] as int) + (v as int);
+          } else {
+            m[k] = v;
+          }
+        });
+      });
+    }
+    return merged;
+  }
+
+  // [delta] as a merge write on the type list, or null when it changes
+  // nothing. Counts are increments, so two staff changing units of one type
+  // at the same moment both count. Map keys are literal under set(merge), so
+  // a type name with a dot in it ("L.A. Abrasion Machine") is safe.
+  static Map<String, dynamic>? _typeWrite(Map<String, Map<String, dynamic>> delta) {
+    final types = <String, dynamic>{};
+    delta.forEach((type, change) {
+      final m = <String, dynamic>{};
+      change.forEach((k, v) {
+        if (k == 'units' || k == 'out') {
+          if (v != 0) m[k] = FieldValue.increment(v as int);
+        } else {
+          m[k] = v;
+        }
+      });
+      if (m.isNotEmpty) types[type] = m;
+    });
+    if (types.isEmpty) return null;
+    return {'types': types, 'updated_at': FieldValue.serverTimestamp()};
+  }
+
+  // The list is kept current only once it exists and can be read: before the
+  // first rebuild there is nothing to keep, and rules from before 1.0.19
+  // would refuse the write, and with it the whole batch (a registration or
+  // a return would fail).
+  static Future<bool> _keepingTypeList() async => await getItemTypes() != null;
+
+  static void _addTypeWrite(WriteBatch batch, Map<String, Map<String, dynamic>> delta) {
+    final w = _typeWrite(delta);
+    if (w != null) batch.set(_typesRef, w, SetOptions(merge: true));
+  }
+
+  // The list is cached: it changes only when staff register, edit or delete
+  // equipment, and availability is always counted live.
+  static List<Map<String, dynamic>>? _typeCache;
+  static DateTime? _typeCacheAt;
+  static const _typeCacheTtl = Duration(minutes: 10);
+
+  static void forgetItemTypes() {
+    _typeCache = null;
+    _typeCacheAt = null;
+  }
+
+  // The item-type list (one read, then cached), or null when it has not been
+  // built yet or cannot be read (rules from before 1.0.19 refuse it): the
+  // screens then read units the old way instead of failing.
+  static Future<List<Map<String, dynamic>>?> getItemTypes({bool refresh = false}) async {
+    final at = _typeCacheAt;
+    if (!refresh &&
+        _typeCache != null &&
+        at != null &&
+        DateTime.now().difference(at) < _typeCacheTtl) {
+      return _typeCache;
+    }
+    Map<String, dynamic>? data;
+    try {
+      data = (await _typesRef.get()).data();
+    } catch (_) {
+      forgetItemTypes();
+      return null;
+    }
+    if (data == null || data['complete'] != true) {
+      forgetItemTypes();
+      return null;
+    }
+    _typeCache = typeListFrom(data['types'] as Map<String, dynamic>?);
+    _typeCacheAt = DateTime.now();
+    return _typeCache;
+  }
+
+  // What a student can choose from: the types with at least one unit in
+  // service. `counted` is true for the fallback list (before the type list is
+  // built), whose `available` is the number free right now; from the type list
+  // each type has `in_service`, and availability is counted when picked.
+  static Future<({List<Map<String, dynamic>> types, bool counted})> getBorrowableTypes(
+      {bool refresh = false}) async {
+    final listed = await getItemTypes(refresh: refresh);
+    if (listed != null) {
+      return (
+        types: [for (final t in listed) if ((t['in_service'] as int) > 0) t],
+        counted: false,
+      );
+    }
+    final legacy = await getAvailableTypes();
+    return (
+      types: [
+        for (final t in legacy)
+          {...t, 'available': t['count'], 'in_service': t['count'], 'units': t['count']},
+      ],
+      counted: true,
+    );
+  }
+
+  // How many units of [type] are free right now: one count, billed as one
+  // read. Two equality filters need no composite index; should the count ever
+  // be refused, the type's units are read instead.
+  static Future<int> availableNow(String type) async {
+    if (await getItemTypes() == null) {
+      final legacy = await getAvailableTypes();
+      final match = legacy.where((t) => t['name'] == type);
+      return match.isEmpty ? 0 : (match.first['count'] as int? ?? 0);
+    }
+    final units = _db.collection('equipment').where('type_name', isEqualTo: type);
+    try {
+      return (await units.where('status', isEqualTo: 'Available').count().get()).count ?? 0;
+    } catch (_) {
+      final snap = await units.get();
+      return snap.docs.where((d) => d.data()['status'] == 'Available').length;
+    }
+  }
+
+  // Every unit named [type] or "[type] #n", found by name range: how units
+  // were found before they carried type_name (one read per unit of the name).
+  static Future<List<Map<String, dynamic>>> _unitsNamed(String type) async {
+    final snap = await _db
+        .collection('equipment')
+        .where('equipment_name', isGreaterThanOrEqualTo: type)
+        .where('equipment_name', isLessThan: '$type')
+        .get();
+    return [
+      for (final d in snap.docs)
+        if (baseNameOf('${d.data()['equipment_name'] ?? ''}') == type)
+          {...d.data(), 'equipment_id': d.id},
+    ];
+  }
+
+  // One unit standing for [type] on the student's item page: an Available one
+  // when there is one.
+  static Future<Map<String, dynamic>?> sampleUnitOf(String type) async {
+    final col = _db.collection('equipment');
+    var snap = await col
+        .where('type_name', isEqualTo: type)
+        .where('status', isEqualTo: 'Available')
+        .limit(1)
+        .get();
+    if (snap.docs.isEmpty) {
+      snap = await col.where('type_name', isEqualTo: type).limit(1).get();
+    }
+    if (snap.docs.isNotEmpty) {
+      return {...snap.docs.first.data(), 'equipment_id': snap.docs.first.id};
+    }
+    // Units from before the first rebuild.
+    final units = await _unitsNamed(type);
+    if (units.isEmpty) return null;
+    return units.firstWhere((u) => u['status'] == 'Available', orElse: () => units.first);
+  }
+
+  // Free units of [type] to reserve from, reading only what a request needs:
+  // a few more Available units than asked (one may go meanwhile), plus the
+  // unit the student was looking at. While the type list is not built yet,
+  // units have no type_name, so the name-range read runs instead.
+  static Future<List<Map<String, dynamic>>> _freeUnitsOf(
+      String type, int quantity, {String preferId = ''}) async {
+    final snap = await _db
+        .collection('equipment')
+        .where('type_name', isEqualTo: type)
+        .where('status', isEqualTo: 'Available')
+        .limit(quantity + 10)
+        .get();
+    final units = [for (final d in snap.docs) {...d.data(), 'equipment_id': d.id}];
+    if (preferId.isNotEmpty && !units.any((u) => '${u['equipment_id']}' == preferId)) {
+      final p = await getEquipmentById(preferId);
+      if (p != null &&
+          p['status'] == 'Available' &&
+          baseNameOf('${p['equipment_name'] ?? ''}') == type) {
+        units.add(p);
+      }
+    }
+    if (units.length >= quantity || await getItemTypes() != null) return units;
+    return _unitsNamed(type);
+  }
+
+  // Every unit of [types] (staff Inventory and QR labels), by name. `in`
+  // takes up to 30 values per query.
+  static Future<List<Map<String, dynamic>>> unitsOfTypes(List<String> types) async {
+    final units = <Map<String, dynamic>>[];
+    for (var i = 0; i < types.length; i += 30) {
+      final chunk = types.sublist(i, i + 30 > types.length ? types.length : i + 30);
+      final snap = await _db.collection('equipment').where('type_name', whereIn: chunk).get();
+      units.addAll([for (final d in snap.docs) {...d.data(), 'equipment_id': d.id}]);
+    }
+    units.sort((a, b) => '${a['equipment_name'] ?? ''}'
+        .toLowerCase()
+        .compareTo('${b['equipment_name'] ?? ''}'.toLowerCase()));
+    return units;
+  }
+
+  // A search box entry that is (the start of) a QR code: "MEA-86898",
+  // "too-869071", or just the digits ("869071"). Pure, so it is unit-tested.
+  static bool looksLikeQrCode(String q) =>
+      RegExp(r'^([a-z]{3}-\d*|\d{3,6})$', caseSensitive: false).hasMatch(q.trim());
+
+  // The units whose QR code starts with [q] ("MEA-8689"), or whose six digits
+  // start with it ("8689", any category). Reads only the matches.
+  static Future<List<Map<String, dynamic>>> unitsByQrCode(String q) async {
+    final code = q.trim().toUpperCase();
+    final prefixes = code.contains('-')
+        ? [code]
+        : [for (final c in kCategories) '${_qrPrefix(c)}-$code'];
+    final units = <Map<String, dynamic>>[];
+    for (final p in prefixes.toSet()) {
+      final snap = await _db
+          .collection('equipment')
+          .where('qr_code', isGreaterThanOrEqualTo: p)
+          .where('qr_code', isLessThanOrEqualTo: '$p')
+          .limit(200)
+          .get();
+      units.addAll([for (final d in snap.docs) {...d.data(), 'equipment_id': d.id}]);
+    }
+    units.sort((a, b) => '${a['equipment_name'] ?? ''}'
+        .toLowerCase()
+        .compareTo('${b['equipment_name'] ?? ''}'.toLowerCase()));
+    return units;
+  }
+
+  // The type names a staff search means: names containing it, and the type a
+  // unit name belongs to ("Digital Multimeter #03" → Digital Multimeter).
+  // Pure, so it is unit-tested.
+  static List<String> typesMatching(Iterable<String> types, String query) {
+    final q = query.trim().toLowerCase();
+    final base = baseNameOf(q);
+    return [
+      for (final t in types)
+        if (q.isEmpty ||
+            t.toLowerCase().contains(q) ||
+            (base != q && t.toLowerCase() == base))
+          t,
+    ];
+  }
+
+  // Rebuilds the type list from every unit (one read per unit, so staff run
+  // it when setting the list up, after an import, or if it ever looks wrong)
+  // and gives each unit the right type_name. The first run is what switches
+  // the screens over from reading units.
+  static Future<Map<String, dynamic>> rebuildItemTypes(
+      {void Function(int done, int total)? onProgress}) async {
+    try {
+      final snap = await _db.collection('equipment').get();
+      final units = [for (final d in snap.docs) {...d.data(), 'equipment_id': d.id}];
+      final stale = [
+        for (final u in units)
+          if ('${u['type_name'] ?? ''}' != baseNameOf('${u['equipment_name'] ?? ''}')) u,
+      ];
+      // Eight updates to a batch (the rules read the staff record for each
+      // write, and a batch may make 20 such reads), four batches at a time.
+      final batches = <WriteBatch>[];
+      for (var i = 0; i < stale.length; i += 8) {
+        final batch = _db.batch();
+        for (final u in stale.skip(i).take(8)) {
+          batch.update(_db.collection('equipment').doc('${u['equipment_id']}'),
+              {'type_name': baseNameOf('${u['equipment_name'] ?? ''}')});
+        }
+        batches.add(batch);
+      }
+      var done = 0;
+      for (var i = 0; i < batches.length; i += 4) {
+        final group = batches.skip(i).take(4).toList();
+        await Future.wait(group.map((b) => b.commit()));
+        done = (i + group.length) * 8 > stale.length ? stale.length : (i + group.length) * 8;
+        onProgress?.call(done, stale.length);
+      }
+      final types = buildTypeIndex(units);
+      await _typesRef.set({
+        'complete':   true,
+        'types':      types,
+        'unit_count': units.length,
+        'rebuilt_at': FieldValue.serverTimestamp(),
+        'rebuilt_by': Session.name,
+        'updated_at': FieldValue.serverTimestamp(),
+      });
+      forgetItemTypes();
+      return {
+        'success':    true,
+        'types':      types.length,
+        'units':      units.length,
+        'backfilled': stale.length,
+      };
+    } catch (e) {
+      return {'success': false, 'message': friendlyError(e)};
+    }
   }
 
   // A borrow request: one or more item types, each with a quantity. Each unit
@@ -1095,13 +1589,18 @@ class ApiService {
         };
       }
 
-      // The student's own records, read once for both the overdue gate and the
-      // duplicate check below (these used to be two identical queries).
+      // The student's open records (Pending and Approved), read once for both
+      // the overdue gate and the duplicate check below (these used to be two
+      // identical queries). Both checks look only at open records, so reading
+      // the whole history cost one read per past loan on every request (59 for
+      // the demo student, 2026-10-15); a student usually has none or a few open.
+      // Equality + `in` needs no composite index (checked live).
       final mine = sid.isEmpty
           ? <Map<String, dynamic>>[]
           : (await _db
                   .collection('borrow_transactions')
                   .where('student_id', isEqualTo: sid)
+                  .where('status', whereIn: kOpenRequestStatuses)
                   .get())
               .docs
               .map((d) => d.data())
@@ -1169,19 +1668,12 @@ class ApiService {
       }
 
       // Reserve the units: for each type, its Available units, the one the
-      // student was looking at first, then by unit number (pickUnits).
+      // student was looking at first, then by unit number (pickUnits). Only a
+      // few more free units than asked are read (1.0.19), not every unit of
+      // the type: there are 197 sieves.
       final picked = <Map<String, dynamic>>[];
       for (final l in wanted) {
-        final snap = await _db
-            .collection('equipment')
-            .where('equipment_name', isGreaterThanOrEqualTo: l.name)
-            .where('equipment_name', isLessThan: '${l.name}')
-            .get();
-        final units = [
-          for (final d in snap.docs)
-            if (baseNameOf('${d.data()['equipment_name'] ?? ''}') == l.name)
-              {...d.data(), 'equipment_id': d.id},
-        ];
+        final units = await _freeUnitsOf(l.name, l.quantity, preferId: l.preferId);
         final chosen = pickUnits(units, l.quantity, preferId: l.preferId);
         if (chosen.length < l.quantity) {
           return {
@@ -1321,6 +1813,7 @@ class ApiService {
       dynamic transactionId, String condition) async {
     try {
       final txRef = _db.collection('borrow_transactions').doc('$transactionId');
+      final keepList = await _keepingTypeList();
       return await _db.runTransaction((tx) async {
         final txDoc = await tx.get(txRef);
         if (!txDoc.exists) {
@@ -1359,8 +1852,17 @@ class ApiService {
           'returned_by':        Session.staffId,
           'returned_by_name':   Session.name,
         });
-        tx.update(_db.collection('equipment').doc(equipId),
-            {'status': equipmentStatusForCondition(condition)});
+        final newStatus = equipmentStatusForCondition(condition);
+        tx.update(_db.collection('equipment').doc(equipId), {'status': newStatus});
+        // A damaged unit leaves service: one more "out" for its type
+        // (1.0.19). A unit on loan is in service, so a good return changes
+        // nothing there.
+        final type = baseNameOf('${data['equipment_name'] ?? ''}');
+        if (keepList && isOutOfService(newStatus) && type.isNotEmpty) {
+          final w = _typeWrite({type: {'units': 0, 'out': 1}});
+          if (w != null) tx.set(_typesRef, w, SetOptions(merge: true));
+          forgetItemTypes();
+        }
         return {'success': true, 'message': 'Equipment returned successfully.'};
       });
     } catch (e) {
@@ -1744,16 +2246,8 @@ class ApiService {
     try {
       final base = baseNameOf('${first['equipment_name'] ?? ''}');
       if (base.isEmpty) return first;
-      final snap = await _db
-          .collection('equipment')
-          .where('equipment_name', isGreaterThanOrEqualTo: base)
-          .where('equipment_name', isLessThan: '$base')
-          .get();
-      final candidates = pickUnits([
-        for (final d in snap.docs)
-          if (baseNameOf('${d.data()['equipment_name'] ?? ''}') == base)
-            {...d.data(), 'equipment_id': d.id},
-      ], snap.docs.length);
+      final free = await _freeUnitsOf(base, 1);
+      final candidates = pickUnits(free, free.length);
       for (final unit in candidates) {
         final res = await _approveAs(txId, unit);
         // Done, or another staff member decided it meanwhile.
@@ -2138,14 +2632,27 @@ class ApiService {
   static Future<Map<String, dynamic>> updateDamageReport(
       String reportId, String status, {String? equipmentId, String? equipmentStatus}) async {
     try {
-      await _db.collection('damage_reports').doc(reportId).update({
+      // One batch: the report, the unit, and (1.0.19) the type list, which
+      // counts a unit coming back from repair as in service again.
+      final batch = _db.batch();
+      batch.update(_db.collection('damage_reports').doc(reportId), {
         'status': status,
         'reviewed_at': FieldValue.serverTimestamp(),
       });
       if (equipmentId != null && equipmentId.isNotEmpty && equipmentStatus != null) {
-        await _db.collection('equipment').doc(equipmentId)
-            .update({'status': equipmentStatus});
+        final eqRef = _db.collection('equipment').doc(equipmentId);
+        final cur = (await eqRef.get()).data();
+        // A unit deleted meanwhile has nothing to update; the report still
+        // gets resolved.
+        if (cur != null) {
+          batch.update(eqRef, {'status': equipmentStatus});
+          if (await _keepingTypeList()) {
+            _addTypeWrite(batch, typeDelta(cur, {...cur, 'status': equipmentStatus}));
+          }
+        }
       }
+      await batch.commit();
+      forgetItemTypes();
       return {'success': true};
     } catch (e) {
       return {'success': false, 'message': friendlyError(e)};

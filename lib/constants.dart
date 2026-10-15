@@ -16,8 +16,8 @@
 // `version: <kAppVersion>+<kAppBuild>` in step. Dart cannot read pubspec at
 // runtime without adding the package_info_plus plugin, which is not worth a new
 // native dependency this close to the defense.
-const kAppVersion = '1.0.18';
-const kAppBuild = 31;
+const kAppVersion = '1.0.19';
+const kAppBuild = 33;
 
 // What the About screen prints, e.g. "Version 1.0.1 (build 2)".
 const kAppVersionLabel = 'Version $kAppVersion (build $kAppBuild)';
@@ -65,6 +65,12 @@ const kMaxUnitsPerRegistration = 200;
 // each record (the student's profile and the unit); a batch may make at most
 // 20 such reads, so 8 leaves room.
 const kMaxUnitsPerRequest = 8;
+
+// The statuses of a request that is still open: waiting for staff, or approved
+// (set aside for pick-up or out on loan). The checks before a new request (an
+// overdue loan, a duplicate pending request) need only these, so they read
+// these instead of the student's whole history (1.0.19).
+const kOpenRequestStatuses = ['Pending', 'Approved'];
 
 // ─── Staff access levels ──────────────────────────────────────────────────────
 // Mirrors the roles firestore.rules knows about. 'superadmin' was added on

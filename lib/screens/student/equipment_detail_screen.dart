@@ -19,7 +19,20 @@ import 'borrow_request_screen.dart';
 
 class EquipmentDetailScreen extends StatefulWidget {
   final Map<String, dynamic> equipment;
-  const EquipmentDetailScreen({super.key, required this.equipment});
+  // Opened from the student catalog (1.0.19), the page is about an item TYPE:
+  // [equipment] is one of its units, standing in for the details and photo,
+  // [available] how many are free right now and [inLab] how many can be lent
+  // at all. Staff (Inventory) open one unit, with these left null.
+  final String? typeName;
+  final int? available;
+  final int? inLab;
+  const EquipmentDetailScreen({
+    super.key,
+    required this.equipment,
+    this.typeName,
+    this.available,
+    this.inLab,
+  });
   @override
   State<EquipmentDetailScreen> createState() => _EquipmentDetailScreenState();
 }
@@ -57,9 +70,15 @@ class _EquipmentDetailScreenState extends State<EquipmentDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final name      = equipment['equipment_name'] as String? ?? '';
+    final typeName  = widget.typeName;
+    final byType    = typeName != null;
+    final free      = widget.available ?? 0;
+    final name      = typeName ?? equipment['equipment_name'] as String? ?? '';
     final category  = equipment['category']       as String? ?? '';
-    final status    = equipment['status']         as String? ?? 'Available';
+    // For a type: whether any unit is free, said as a count.
+    final status    = byType
+        ? (free > 0 ? '$free available' : 'None free right now')
+        : equipment['status'] as String? ?? 'Available';
     final location  = equipment['location']       as String? ?? '';
     final qrCode    = equipment['qr_code']        as String? ?? '';
     final brand     = equipment['brand']          as String? ?? '';
@@ -74,7 +93,7 @@ class _EquipmentDetailScreenState extends State<EquipmentDetailScreen> {
     final hasPhoto  = photo != null && photo.isNotEmpty;
     final courses   = (equipment['courses'] as List?)?.cast<String>() ?? [];
     final equipId   = '${equipment['equipment_id'] ?? ''}';
-    final isAvail   = status == 'Available';
+    final isAvail   = byType ? free > 0 : status == 'Available';
     final isStudent = Session.role == 'student';
 
     return Scaffold(
@@ -177,14 +196,19 @@ class _EquipmentDetailScreenState extends State<EquipmentDetailScreen> {
                       for (final (i, row) in [
                         if (brand.isNotEmpty) ('Brand / Manufacturer', brand),
                         if (model.isNotEmpty) ('Model', model),
-                        if (serial.isNotEmpty) ('Serial Number', serial),
-                        if (iin.isNotEmpty) ('IIN', iin),
+                        // A type page leaves out what belongs to one unit.
+                        if (!byType && serial.isNotEmpty) ('Serial Number', serial),
+                        if (!byType && iin.isNotEmpty) ('IIN', iin),
                         ('Category', category),
                         if (location.isNotEmpty) ('Storage Location', location),
-                        ('Status', status),
+                        if (byType)
+                          ('Available now',
+                              widget.inLab == null ? status : '$free of ${widget.inLab} in the lab')
+                        else
+                          ('Status', status),
                         if (courses.isNotEmpty)
                           ('Available to', courses.map((c) => courseLabel(c)).join(', ')),
-                        if (acquired != null) ('Date Acquired', formatDate(acquired)),
+                        if (!byType && acquired != null) ('Date Acquired', formatDate(acquired)),
                         // When staff put it in the system; students don't need it.
                         if (!isStudent && added != null)
                           ('Date Added',
@@ -193,8 +217,8 @@ class _EquipmentDetailScreenState extends State<EquipmentDetailScreen> {
                         specRow(row.$1, row.$2, isFirst: i == 0),
                     ]),
                   ),
-                  // ── QR Code card ──
-                  if (qrCode.isNotEmpty) ...[
+                  // ── QR Code card (one unit's) ──
+                  if (!byType && qrCode.isNotEmpty) ...[
                     const SizedBox(height: 20),
                     const Text('QR Code',
                         style: TextStyle(
@@ -251,13 +275,17 @@ class _EquipmentDetailScreenState extends State<EquipmentDetailScreen> {
                                     builder: (_) => BorrowRequestScreen(
                                         equipmentName: name,
                                         equipmentId: equipId,
-                                        equipment: equipment)))
+                                        equipment: equipment,
+                                        available: byType ? free : null)))
                             : null,
                         icon: Icon(isAvail
                             ? Icons.assignment_outlined
                             : Icons.block_rounded),
-                        label: Text(
-                            isAvail ? 'Borrow This Equipment' : 'Currently Unavailable'),
+                        label: Text(isAvail
+                            ? 'Borrow This Equipment'
+                            : byType
+                                ? 'None Free Right Now'
+                                : 'Currently Unavailable'),
                         style: ElevatedButton.styleFrom(
                           backgroundColor:
                               isAvail ? AppTheme.primary : AppTheme.textLight,

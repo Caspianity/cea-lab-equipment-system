@@ -2,8 +2,14 @@
 // LabTrack - staff: admin inventory screen
 //
 // Extracted from firstFile.dart on 2026-08-03 as step 7 of the module split.
+//
+// 1.0.19 (2026-10-15): with the item-type list built, a search or a category
+// reads only the units of the matching types (a QR code, only the matching
+// codes) instead of paging through all 1,067 units until enough matched. The
+// plain list still pages 20 at a time. Managers can rebuild the type list here.
 // -----------------------------------------------------------------------------
 
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -40,6 +46,8 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
   // list, so staff saw an empty box and "No equipment found" (found on the
   // phone, 2026-10-05).
   final _searchCtrl = TextEditingController();
+  // 1.0.19: with the item-type list the category goes through the matching
+  // types (see _startFind), so the note below only applies before it exists.
   // TODO(scalability): this category filter is single-select, so unlike the
   // student catalog's multi-select it COULD run server-side as
   //   .where('category', isEqualTo: _filter).orderBy('equipment_name')
@@ -65,6 +73,22 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
   int _availableItems = 0;
   int _borrowedItems  = 0;
 
+  // The item-type list (1.0.19); null until a manager builds it.
+  List<Map<String, dynamic>>? _types;
+  // The filtered view: types still to load, the units found so far, and the
+  // search + category they belong to (a slower answer to an older search is
+  // dropped).
+  List<String> _queue = [];
+  List<Map<String, dynamic>> _found = [];
+  bool _finding = false;
+  String _foundKey = '';
+  Timer? _debounce;
+  bool _rebuilding = false;
+
+  bool get _filtering => _search.trim().isNotEmpty || _filter != 'All';
+  bool get _byType => _types != null && _filtering;
+  String get _findKey => '$_filter|${_search.trim().toLowerCase()}';
+
   @override
   void initState() {
     super.initState();
@@ -74,6 +98,7 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
 
   @override
   void dispose() {
+    _debounce?.cancel();
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     _searchCtrl.dispose();
@@ -83,7 +108,116 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
   void _onScroll() {
     if (!_scrollController.hasClients) return;
     final pos = _scrollController.position;
-    if (pos.pixels >= pos.maxScrollExtent - 400) _loadMore();
+    if (pos.pixels >= pos.maxScrollExtent - 400) {
+      if (_byType) {
+        _findMore();
+      } else {
+        _loadMore();
+      }
+    }
+  }
+
+  // The type names the search and category point to, in name order.
+  List<String> _matchingTypes() => ApiService.typesMatching([
+        for (final t in _types ?? const <Map<String, dynamic>>[])
+          if (_filter == 'All' || t['category'] == _filter) '${t['name']}',
+      ], _search);
+
+  void _scheduleFind() {
+    _debounce?.cancel();
+    if (!_byType) return;
+    _debounce = Timer(const Duration(milliseconds: 350), _startFind);
+  }
+
+  // A new search or category: the matching QR codes, or the units of the
+  // matching types, a screenful at a time.
+  Future<void> _startFind() async {
+    if (!_byType) return;
+    final key = _findKey;
+    final q = _search.trim();
+    setState(() { _foundKey = key; _found = []; _queue = []; _finding = true; });
+    try {
+      if (q.isNotEmpty && ApiService.looksLikeQrCode(q)) {
+        final units = await ApiService.unitsByQrCode(q);
+        if (!mounted || _foundKey != key) return;
+        setState(() {
+          _found = units.where(_matches).toList();
+          _finding = false;
+        });
+        return;
+      }
+      _queue = _matchingTypes();
+      await _findMore(key);
+    } catch (_) {
+      if (mounted && _foundKey == key) setState(() => _finding = false);
+    }
+  }
+
+  // The units of the next matching types: about a screenful, by the counts in
+  // the type list, at most 30 types a query.
+  Future<void> _findMore([String? key]) async {
+    final k = key ?? _foundKey;
+    if (key == null && (_finding || !_byType)) return;
+    if (_queue.isEmpty) {
+      if (mounted) setState(() => _finding = false);
+      return;
+    }
+    final units = {for (final t in _types!) '${t['name']}': t['units'] as int? ?? 1};
+    final next = <String>[];
+    var expected = 0;
+    while (_queue.isNotEmpty && next.length < 30 && expected < _pageSize) {
+      final name = _queue.removeAt(0);
+      next.add(name);
+      expected += units[name] ?? 1;
+    }
+    setState(() => _finding = true);
+    try {
+      final loaded = await ApiService.unitsOfTypes(next);
+      if (!mounted || _foundKey != k) return;
+      setState(() {
+        _found = [..._found, ...loaded.where(_matches)];
+        _finding = false;
+      });
+    } catch (_) {
+      if (!mounted || _foundKey != k) return;
+      // Put them back so scrolling again retries.
+      setState(() { _queue = [...next, ..._queue]; _finding = false; });
+    }
+  }
+
+  // Rebuilds the item-type list from every record (1.0.19). Needed once to
+  // switch the lists over, after an import, or if a count ever looks wrong.
+  Future<void> _rebuild() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.sync_rounded, color: AppTheme.primary, size: 40),
+        title: const Text('Rebuild the item list?'),
+        content: Text(
+            'Reads all $_totalItems equipment records once to rebuild the list of '
+            'item types that students borrow from, and gives each record its type.\n\n'
+            'Do this the first time, after importing equipment, or if a count looks wrong.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Rebuild')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    setState(() => _rebuilding = true);
+    final res = await ApiService.rebuildItemTypes();
+    if (!mounted) return;
+    setState(() => _rebuilding = false);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(res['success'] == true
+          ? 'Item list rebuilt: ${res['types']} types from ${res['units']} records'
+              '${(res['backfilled'] as int? ?? 0) > 0 ? ' (${res['backfilled']} records given their type)' : ''}.'
+          : 'Could not rebuild the item list: ${res['message'] ?? 'unknown error'}'),
+      backgroundColor: res['success'] == true ? AppTheme.success : AppTheme.danger,
+      behavior: SnackBarBehavior.floating,
+      duration: const Duration(seconds: 6),
+    ));
+    if (res['success'] == true) _load();
   }
 
   Future<void> _load() async {
@@ -95,11 +229,15 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
       _hasMore = true;
     });
     try {
-      // Both start before either is awaited, so they run concurrently.
+      // All start before any is awaited, so they run concurrently. The type
+      // list is one read, or none while it is cached.
       final pageFuture   = ApiService.getEquipmentPage(limit: _pageSize);
       final countsFuture = ApiService.getEquipmentCounts();
+      final typesFuture  = ApiService.getItemTypes()
+          .then<List<Map<String, dynamic>>?>((t) => t, onError: (_) => null);
       final page   = await pageFuture;
       final counts = await countsFuture;
+      final types  = await typesFuture;
       if (!mounted) return;
       setState(() {
         _equipment = page.items;
@@ -108,8 +246,10 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
         _totalItems = counts.total;
         _availableItems = counts.available;
         _borrowedItems  = counts.borrowed;
+        _types = types;
         _loading = false;
       });
+      if (_byType) _startFind();
     } catch (_) {
       if (!mounted) return;
       setState(() { _loading = false; _hasError = true; });
@@ -146,7 +286,10 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
             final c = _categories[i];
             final sel = _filter == c;
             return GestureDetector(
-              onTap: () => setState(() => _filter = c),
+              onTap: () {
+                setState(() => _filter = c);
+                _scheduleFind();
+              },
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 160),
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
@@ -167,8 +310,9 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
 
   // ── QR labels (web portal, 2026-10-06) ──
   // A PDF of label sheets for every item the category and search show. The
-  // list on screen is paged, so the whole inventory is read and filtered the
-  // same way, only when staff ask.
+  // list on screen is paged, so the matching units are read in full, only when
+  // staff ask: with the type list (1.0.19) just those of the matching types or
+  // codes; without it, or with no filter, the whole inventory.
   bool _makingLabels = false;
 
   bool _matches(Map<String, dynamic> e) {
@@ -182,7 +326,13 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
   Future<void> _qrLabels() async {
     setState(() => _makingLabels = true);
     try {
-      final items = (await ApiService.getAllEquipment()).where(_matches).toList();
+      final q = _search.trim();
+      final source = !_byType
+          ? await ApiService.getAllEquipment()
+          : q.isNotEmpty && ApiService.looksLikeQrCode(q)
+              ? await ApiService.unitsByQrCode(q)
+              : await ApiService.unitsOfTypes(_matchingTypes());
+      final items = source.where(_matches).toList();
       if (!mounted) return;
       if (items.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -277,7 +427,7 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
   // Trailing row of the inventory list: paging spinner, empty-result message,
   // or a quiet end-of-list marker.
   Widget _listFooter(bool isEmpty) {
-    if (_loadingMore) {
+    if (_byType ? _finding : _loadingMore) {
       return const Padding(
         padding: EdgeInsets.symmetric(vertical: 20),
         child: Center(
@@ -297,7 +447,7 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
         ]),
       );
     }
-    if (!_hasMore) {
+    if (!(_byType ? _queue.isNotEmpty : _hasMore)) {
       return const Padding(
         padding: EdgeInsets.only(top: 16),
         child: Center(
@@ -483,10 +633,19 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
     // things were actually out (QA 2026-09-19, low #6).
     final borrowedItems = _borrowedItems;
 
-    // An active search or category can hide everything loaded so far while
-    // matches remain further down the collection; pull more until the list
-    // fills or the inventory runs out.
-    if (filtered.length < _pageSize && _hasMore && !_loadingMore && !_loading) {
+    // With the type list, a search or category shows the units found for it
+    // (1.0.19); otherwise the pages loaded so far, filtered.
+    final shown = _byType ? _found : filtered;
+
+    if (_byType) {
+      // Fill the screen from the next matching types.
+      if (_found.length < _pageSize && _queue.isNotEmpty && !_finding && !_loading) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => _findMore());
+      }
+    } else if (filtered.length < _pageSize && _hasMore && !_loadingMore && !_loading) {
+      // An active search or category can hide everything loaded so far while
+      // matches remain further down the collection; pull more until the list
+      // fills or the inventory runs out. (Only before the type list exists.)
       WidgetsBinding.instance.addPostFrameCallback((_) => _loadMore());
     }
     // Four cards a row on a wide window can leave a page too short to scroll,
@@ -519,7 +678,10 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
                 // Search bar
                 TextField(
                   controller: _searchCtrl,
-                  onChanged: (v) => setState(() => _search = v),
+                  onChanged: (v) {
+                    setState(() => _search = v);
+                    _scheduleFind();
+                  },
                   style: const TextStyle(color: Colors.white),
                   decoration: InputDecoration(
                     hintText: 'Search by name or ID...',
@@ -551,17 +713,50 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
                           style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
                     ),
                   ],
+                  // Rebuild the item-type list (1.0.19), managers only.
+                  if (Session.canManage)
+                    IconButton(
+                      tooltip: 'Rebuild item list',
+                      onPressed: _rebuilding ? null : _rebuild,
+                      icon: _rebuilding
+                          ? const SizedBox(
+                              width: 16, height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                          : const Icon(Icons.sync_rounded, color: Colors.white, size: 20),
+                    ),
                 ]),
               ],
             ),
           ),
+
+          // Until the item-type list is built, students' lists read every
+          // unit (1.0.19); say so to the people who can build it.
+          if (_types == null && Session.canManage)
+            Container(
+              width: double.infinity,
+              color: const Color(0x1AF5A623),
+              padding: const EdgeInsets.fromLTRB(16, 10, 8, 10),
+              child: Row(children: [
+                const Icon(Icons.info_outline_rounded, color: AppTheme.warning, size: 18),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Text(
+                      "The item list isn't set up yet, so the student catalog and borrow "
+                      'form read every unit. Build it once to make them fast and cheap.',
+                      style: TextStyle(fontSize: 12, color: AppTheme.textDark)),
+                ),
+                TextButton(
+                    onPressed: _rebuilding ? null : _rebuild,
+                    child: const Text('Build now')),
+              ]),
+            ),
 
           // ── Equipment list ──
           // Rows of cards on a wide window, one card per row on a phone.
           Expanded(
             child: LayoutBuilder(builder: (context, box) {
               final cols = gridColumns(box.maxWidth - 32, minWidth: 400);
-              final rows = (filtered.length + cols - 1) ~/ cols;
+              final rows = (shown.length + cols - 1) ~/ cols;
               return ListView.separated(
                 controller: _scrollController,
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
@@ -569,8 +764,8 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
                 itemCount: rows + 1,
                 separatorBuilder: (_, _) => const SizedBox(height: 10),
                 itemBuilder: (_, i) {
-                  if (i == rows) return _listFooter(filtered.isEmpty);
-                  return gridRow(i, cols, filtered.length, (j) => _itemCard(filtered[j]));
+                  if (i == rows) return _listFooter(shown.isEmpty);
+                  return gridRow(i, cols, shown.length, (j) => _itemCard(shown[j]));
                 },
               );
             }),

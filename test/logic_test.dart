@@ -1257,4 +1257,175 @@ void main() {
       expect(res['message'], kStudentIdLoginMessage);
     });
   });
+
+  // 1.0.19 (2026-10-15): one record lists the item types, so students read it
+  // instead of every unit (1,067 after the import).
+  group('Item types', () {
+    Map<String, dynamic> unit(String name, String status,
+            {String category = 'Measurement',
+            String location = 'ELWO – CE Laboratory',
+            List<String> courses = const ['CE']}) =>
+        {
+          'equipment_name': name,
+          'status': status,
+          'category': category,
+          'location': location,
+          'courses': courses,
+        };
+
+    test('Under Repair and For Disposal are out of service', () {
+      expect(ApiService.isOutOfService('Under Repair'), isTrue);
+      expect(ApiService.isOutOfService('For Disposal'), isTrue);
+      for (final s in ['Available', 'Reserved', 'Borrowed', null]) {
+        expect(ApiService.isOutOfService(s), isFalse);
+      }
+    });
+
+    test('the list counts units and units out of service per type', () {
+      final index = ApiService.buildTypeIndex([
+        unit('Pocket Type Level #1', 'Available'),
+        unit('Pocket Type Level #2', 'Borrowed'),
+        unit('Pocket Type Level #3', 'Under Repair'),
+        unit('Pantograph', 'Available'),
+        unit('Total Station #01', 'For Disposal'),
+        unit('', 'Available'),
+      ]);
+      expect(index.keys.toSet(), {'Pocket Type Level', 'Pantograph', 'Total Station'});
+      expect(index['Pocket Type Level']!['units'], 3);
+      expect(index['Pocket Type Level']!['out'], 1);
+      expect(index['Pantograph']!['units'], 1);
+      expect(index['Total Station']!['out'], 1);
+    });
+
+    test("a type takes most of its units' category and location", () {
+      final index = ApiService.buildTypeIndex([
+        unit('Digital Multimeter', 'Available', category: 'Electronics', location: ''),
+        unit('Digital Multimeter #01', 'Available'),
+        unit('Digital Multimeter #02', 'Available'),
+      ]);
+      expect(index['Digital Multimeter']!['category'], 'Measurement');
+      expect(index['Digital Multimeter']!['location'], 'ELWO – CE Laboratory');
+    });
+
+    test("a type's programs are all its units' programs, or none if any unit has none", () {
+      expect(ApiService.typeCourses([
+        unit('A #1', 'Available', courses: ['ECE']),
+        unit('A #2', 'Available', courses: ['EE', 'ECE']),
+      ]), ['ECE', 'EE']);
+      expect(ApiService.typeCourses([
+        unit('A #1', 'Available', courses: ['CE']),
+        unit('A #2', 'Available', courses: []),
+      ]), isEmpty);
+    });
+
+    test('the stored list reads back by name, with units in service', () {
+      final list = ApiService.typeListFrom({
+        'pantograph': {'units': 1, 'out': 0, 'category': 'Measurement'},
+        'Analog Base Trainer': {'units': 5, 'out': 5, 'category': 'Electronics'},
+        'Gone': {'units': 0, 'out': 0},
+        'Odd': {'units': 2, 'out': 7},
+      });
+      expect(list.map((t) => t['name']), ['Analog Base Trainer', 'Odd', 'pantograph']);
+      expect(list.first['in_service'], 0);
+      expect(list[1]['out'], 2);
+      expect(list.last['in_service'], 1);
+    });
+
+    test('a new unit adds to its type, with its details', () {
+      final d = ApiService.typeDelta(null, unit('Wire Saw #3', 'Available'));
+      expect(d.keys, ['Wire Saw']);
+      expect(d['Wire Saw']!['units'], 1);
+      expect(d['Wire Saw']!['out'], 0);
+      expect(d['Wire Saw']!['category'], 'Measurement');
+      expect(d['Wire Saw']!['courses'], ['CE']);
+    });
+
+    test('a deleted unit leaves its type, out of service or not', () {
+      final d = ApiService.typeDelta(unit('Total Station #04', 'Under Repair'), null);
+      expect(d['Total Station']!['units'], -1);
+      expect(d['Total Station']!['out'], -1);
+      expect(d['Total Station']!.containsKey('category'), isFalse);
+    });
+
+    test('a status change moves only the out-of-service count', () {
+      final before = unit('Total Station #04', 'Under Repair');
+      final d = ApiService.typeDelta(before, {...before, 'status': 'Available'});
+      expect(d['Total Station'], {'units': 0, 'out': -1});
+    });
+
+    test('an unchanged edit changes nothing', () {
+      final u = unit('Pocket Type Level #2', 'Available');
+      expect(ApiService.typeDelta(u, Map<String, dynamic>.from(u))['Pocket Type Level'],
+          {'units': 0, 'out': 0});
+    });
+
+    test('a renamed unit moves to the new type', () {
+      final before = unit('Pocket Level #2', 'For Disposal');
+      final d = ApiService.typeDelta(before, {...before, 'equipment_name': 'Pocket Type Level #7'});
+      expect(d['Pocket Level'], {'units': -1, 'out': -1});
+      expect(d['Pocket Type Level']!['units'], 1);
+      expect(d['Pocket Type Level']!['out'], 1);
+      expect(d['Pocket Type Level']!['category'], 'Measurement');
+    });
+
+    test('an edited category or program is carried to the type', () {
+      final before = unit('Pantograph', 'Available');
+      final d = ApiService.typeDelta(before, {...before, 'category': 'Tools', 'courses': ['CE', 'ME']});
+      expect(d['Pantograph'], {'units': 0, 'out': 0, 'category': 'Tools', 'courses': ['CE', 'ME']});
+    });
+
+    test('a registration of several units adds up', () {
+      final d = ApiService.mergeTypeDeltas([
+        for (var i = 1; i <= 8; i++)
+          ApiService.typeDelta(null, unit('Sieve #00$i', i == 8 ? 'Under Repair' : 'Available')),
+      ]);
+      expect(d['Sieve']!['units'], 8);
+      expect(d['Sieve']!['out'], 1);
+    });
+
+    test('a staff search finds types by part of the name, or by a unit name', () {
+      final types = ['Digital Multimeter', 'Clamp Multimeter', 'Pantograph'];
+      expect(ApiService.typesMatching(types, 'multi'), ['Digital Multimeter', 'Clamp Multimeter']);
+      expect(ApiService.typesMatching(types, 'Digital Multimeter #03'), ['Digital Multimeter']);
+      expect(ApiService.typesMatching(types, ''), types);
+      expect(ApiService.typesMatching(types, 'sieve'), isEmpty);
+    });
+
+    // Submit reads only the student's open records (1.0.19); the overdue
+    // check must find the same loans as it did over the whole history.
+    test('the checks before a request need only open records', () {
+      final now = DateTime(2026, 10, 15, 12);
+      Map<String, dynamic> rec(String name, String status, DateTime due,
+              {bool waiting = false}) =>
+          {
+            'equipment_name': name,
+            'status': status,
+            'due_date': due.toIso8601String(),
+            if (waiting) 'awaiting_pickup': true,
+          };
+      final history = [
+        rec('Beaker 1000 mL #1', 'Returned', DateTime(2026, 9, 1, 17)),
+        rec('Flask 500 mL #2', 'Rejected', DateTime(2026, 9, 2, 17)),
+        rec('Monitor', 'Cancelled', DateTime(2026, 9, 3, 17)),
+        rec('Keyboard', 'Approved', DateTime(2026, 10, 14, 17)),
+        rec('Flask 500 mL #1', 'Approved', DateTime(2026, 10, 14, 17), waiting: true),
+        rec('Pantograph', 'Pending', DateTime(2026, 10, 15, 17)),
+      ];
+      final open = history.where((t) => kOpenRequestStatuses.contains(t['status'])).toList();
+      expect(kOpenRequestStatuses, ['Pending', 'Approved']);
+      expect(open.length, 3);
+      expect(ApiService.overdueLoans(open, now: now).map((t) => t['equipment_name']),
+          ApiService.overdueLoans(history, now: now).map((t) => t['equipment_name']));
+      expect(ApiService.overdueLoans(open, now: now).map((t) => t['equipment_name']), ['Keyboard']);
+    });
+
+    test('QR codes are told from names in the search box', () {
+      for (final q in ['MEA-868984', 'too-869071', 'OTH-', '868984', ' 8689 ']) {
+        expect(ApiService.looksLikeQrCode(q), isTrue, reason: q);
+      }
+      for (final q in ['Pantograph', 'Meter', '12', 'MEA868984', 'Sieve #001']) {
+        expect(ApiService.looksLikeQrCode(q), isFalse, reason: q);
+      }
+    });
+  });
 }

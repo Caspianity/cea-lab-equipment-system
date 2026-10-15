@@ -275,6 +275,16 @@ service cloud.firestore {
       allow write:  if isManager();
     }
 
+    // The item-type list (1.0.19, 2026-10-15): one document, equipment_types/all,
+    // that sums the inventory up by type (units, units out of service, category,
+    // programs), so the catalog and the borrow form read it instead of every
+    // unit. Staff keep it current in the same batch as each unit change;
+    // students only read it. Availability is not stored here, only counted.
+    match /equipment_types/{id} {
+      allow read:   if signedIn();
+      allow write:  if isManager();
+    }
+
     // Borrow transactions: a student creates and reads their own; staff read all;
     // only managers may approve/reject/return (update). Creation is hardened so
     // the business rules hold even against a raw-API caller, not just in the app:

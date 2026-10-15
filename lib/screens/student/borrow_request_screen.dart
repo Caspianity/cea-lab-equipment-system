@@ -12,6 +12,9 @@
 //     when the request is sent), it only made the form longer;
 //   • name and student ID are one read-only line instead of two locked fields;
 //   • subject and purpose stay optional.
+// 1.0.19 (2026-10-15): the item list comes from the item-type list and a
+// type's free units are counted only when it is picked (Firestore reads, see
+// ApiService "Item types").
 // -----------------------------------------------------------------------------
 
 import 'dart:typed_data';
@@ -26,9 +29,14 @@ import '../../widgets/common.dart';
 import 'lab_policies_screen.dart';
 
 // ─── Item Type Picker Sheet ───────────────────────────────────────────────────
-// Bottom sheet behind "Add equipment": every item type with at least one
-// Available unit, how many are free, and a search box. Pops with the chosen
-// type ({name, category, count, photo_thumb}).
+// Bottom sheet behind "Add equipment": the item types in the lab and a search
+// box. Pops with the chosen type ({name, category, count, photo_thumb}), where
+// count is how many are free right now.
+//
+// Since 1.0.19 the list is the item-type list (one read, kept for a few
+// minutes) and a type's free units are counted when the student taps it (one
+// read). The sheet used to read every Available unit each time it opened:
+// ~945 reads with the full inventory (2026-10-15).
 
 class _TypePickerSheet extends StatefulWidget {
   final Set<String> alreadyAdded;
@@ -39,19 +47,54 @@ class _TypePickerSheet extends StatefulWidget {
 
 class _TypePickerSheetState extends State<_TypePickerSheet> {
   List<Map<String, dynamic>> _types = [];
+  // Until staff build the type list, the old list is used; it already knows
+  // how many of each are free.
+  bool _counted = false;
   bool _loading = true;
   bool _failed  = false;
   final _searchCtrl = TextEditingController();
   String _search = '';
+  // The type being checked after a tap, and what a check found when nothing
+  // could be added.
+  String _checking = '';
+  final Map<String, String> _note = {};
 
   @override
   void initState() {
     super.initState();
-    ApiService.getAvailableTypes().then((types) {
-      if (mounted) setState(() { _types = types; _loading = false; });
+    ApiService.getBorrowableTypes().then((res) {
+      if (mounted) {
+        setState(() { _types = res.types; _counted = res.counted; _loading = false; });
+      }
     }).catchError((_) {
       if (mounted) setState(() { _failed = true; _loading = false; });
     });
+  }
+
+  Future<void> _pick(Map<String, dynamic> t) async {
+    if (_checking.isNotEmpty) return;
+    if (_counted) {
+      Navigator.pop(context, {...t, 'count': t['available']});
+      return;
+    }
+    final name = '${t['name']}';
+    setState(() { _checking = name; _note.remove(name); });
+    try {
+      final free = await ApiService.availableNow(name);
+      if (!mounted) return;
+      if (free > 0) {
+        Navigator.pop(context, {...t, 'count': free});
+        return;
+      }
+      final inLab = t['in_service'] as int? ?? 0;
+      setState(() => _note[name] = inLab == 1
+          ? 'None free right now: it is out or reserved.'
+          : 'None free right now: all $inLab are out or reserved.');
+    } catch (_) {
+      if (mounted) setState(() => _note[name] = 'Could not check. Tap to try again.');
+    } finally {
+      if (mounted) setState(() => _checking = '');
+    }
   }
 
   @override
@@ -93,10 +136,13 @@ class _TypePickerSheetState extends State<_TypePickerSheet> {
           ]),
         ),
         const SizedBox(height: 4),
-        const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 20),
-          child: Text('Only items available right now are shown.',
-              style: TextStyle(fontSize: 12, color: AppTheme.textMid)),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: Text(
+              _counted
+                  ? 'Only items available right now are shown.'
+                  : 'Tap an item to add it. The app checks how many are free.',
+              style: const TextStyle(fontSize: 12, color: AppTheme.textMid)),
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
@@ -118,19 +164,27 @@ class _TypePickerSheetState extends State<_TypePickerSheet> {
                       child: Text('Could not load equipment.',
                           style: TextStyle(color: AppTheme.textMid)))
                   : shown.isEmpty
-                      ? const Center(
-                          child: Text('No available equipment.',
-                              style: TextStyle(color: AppTheme.textMid)))
+                      ? Center(
+                          child: Text(
+                              _types.isEmpty
+                                  ? 'No available equipment.'
+                                  : 'No equipment matches "$_search".',
+                              style: const TextStyle(color: AppTheme.textMid)))
                       : ListView.separated(
                           padding: const EdgeInsets.all(16),
                           itemCount: shown.length,
                           separatorBuilder: (_, _) => const SizedBox(height: 8),
                           itemBuilder: (_, i) {
                             final t = shown[i];
-                            final added = widget.alreadyAdded.contains('${t['name']}');
-                            final count = t['count'] as int? ?? 0;
+                            final name = '${t['name']}';
+                            final added = widget.alreadyAdded.contains(name);
+                            final checking = _checking == name;
+                            final note = _note[name];
+                            final line = _counted
+                                ? '${t['available'] ?? 0} available  •  ${t['category'] ?? ''}'
+                                : '${t['in_service'] ?? 0} in the lab  •  ${t['category'] ?? ''}';
                             return GestureDetector(
-                              onTap: () => Navigator.pop(context, t),
+                              onTap: () => _pick(t),
                               child: Container(
                                 padding: const EdgeInsets.all(14),
                                 decoration: BoxDecoration(
@@ -155,16 +209,24 @@ class _TypePickerSheetState extends State<_TypePickerSheet> {
                                             fontWeight: FontWeight.bold,
                                             fontSize: 14,
                                             color: AppTheme.textDark)),
-                                    Text('$count available  •  ${t['category'] ?? ''}',
-                                        style: const TextStyle(
-                                            fontSize: 12, color: AppTheme.textMid)),
+                                    Text(note ?? line,
+                                        style: TextStyle(
+                                            fontSize: 12,
+                                            color: note == null
+                                                ? AppTheme.textMid
+                                                : AppTheme.danger)),
                                   ])),
-                                  Icon(
-                                    added
-                                        ? Icons.check_circle_rounded
-                                        : Icons.add_circle_outline_rounded,
-                                    color: added ? AppTheme.primary : AppTheme.success,
-                                  ),
+                                  if (checking)
+                                    const SizedBox(
+                                        width: 22, height: 22,
+                                        child: CircularProgressIndicator(strokeWidth: 2))
+                                  else
+                                    Icon(
+                                      added
+                                          ? Icons.check_circle_rounded
+                                          : Icons.add_circle_outline_rounded,
+                                      color: added ? AppTheme.primary : AppTheme.success,
+                                    ),
                                 ]),
                               ),
                             );
@@ -203,11 +265,15 @@ class BorrowRequestScreen extends StatefulWidget {
   // Full equipment record when the student arrives from the catalog, so its
   // type can be added to the request straight away, with its photo.
   final Map<String, dynamic>? equipment;
+  // How many of that type are free, when the item page has just counted them
+  // (1.0.19), so the form does not count again.
+  final int? available;
   const BorrowRequestScreen({
     super.key,
     this.equipmentName,
     this.equipmentId = '',
     this.equipment,
+    this.available,
   });
   @override
   State<BorrowRequestScreen> createState() => _BorrowRequestScreenState();
@@ -299,13 +365,16 @@ class _BorrowRequestScreenState extends State<BorrowRequestScreen> {
             : '${e?['equipment_id'] ?? ''}',
       );
       _lines.add(line);
-      // How many of that type are free, for the quantity limit.
-      ApiService.getAvailableTypes().then((types) {
-        if (!mounted) return;
-        final match = types.where((t) => t['name'] == line.name).toList();
-        setState(() => line.available =
-            match.isEmpty ? 0 : (match.first['count'] as int? ?? 0));
-      }).catchError((_) {});
+      // How many of that type are free, for the quantity limit: one count
+      // (1.0.19), or none when the item page has just counted.
+      final known = widget.available;
+      if (known != null) {
+        line.available = known;
+      } else {
+        ApiService.availableNow(line.name).then((n) {
+          if (mounted) setState(() => line.available = n);
+        }).catchError((_) {});
+      }
     }
   }
 
