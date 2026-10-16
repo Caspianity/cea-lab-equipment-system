@@ -39,6 +39,8 @@ class AdminDashboardScreen extends StatefulWidget {
 class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   int _currentIndex = 0;
   StreamSubscription<Map<String, dynamic>?>? _account;
+  // The Dashboard tab, so the portal's Refresh button can reload it.
+  final _homeKey = GlobalKey<_AdminHomeState>();
 
   @override
   void initState() {
@@ -122,7 +124,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   // A new instance of the same type rebuilds the subtree while keeping its
   // State, so the stats already loaded are not re-fetched.
   List<Widget> get _pages => [
-        _AdminHome(onViewAll: _openRequests),
+        _AdminHome(key: _homeKey, onViewAll: _openRequests),
         AdminRequestsScreen(initialTab: _requestsTab),
         const AdminInventoryScreen(),
         const AdminReportsScreen(),
@@ -193,6 +195,16 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           ],
         ),
         actions: [
+          // The Dashboard is read once when it opens. A phone pulls it down to
+          // reload; a mouse cannot, so on the portal a new request stayed out
+          // of sight until staff switched tabs or reloaded the page (portal QA
+          // 2026-10-15). The portal gets a Refresh button instead.
+          if (kIsWeb && _currentIndex == 0)
+            IconButton(
+              tooltip: 'Refresh',
+              icon: const Icon(Icons.refresh_rounded, color: Colors.white),
+              onPressed: () => _homeKey.currentState?._load(),
+            ),
           IconButton(
             tooltip: 'My Profile',
             icon: const Icon(Icons.account_circle_outlined, color: Colors.white),
@@ -303,7 +315,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 class _AdminHome extends StatefulWidget {
   // Opens the Requests tab: 0 = Pending, 1 = Approved.
   final void Function(int tab) onViewAll;
-  const _AdminHome({required this.onViewAll});
+  const _AdminHome({super.key, required this.onViewAll});
   @override
   State<_AdminHome> createState() => _AdminHomeState();
 }

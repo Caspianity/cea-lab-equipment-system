@@ -17,7 +17,7 @@
 // runtime without adding the package_info_plus plugin, which is not worth a new
 // native dependency this close to the defense.
 const kAppVersion = '1.0.19';
-const kAppBuild = 33;
+const kAppBuild = 34;
 
 // What the About screen prints, e.g. "Version 1.0.1 (build 2)".
 const kAppVersionLabel = 'Version $kAppVersion (build $kAppBuild)';

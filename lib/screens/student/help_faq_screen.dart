@@ -36,7 +36,7 @@ class _HelpFaqScreenState extends State<HelpFaqScreen> {
     },
     {
       'q': 'Where do I find the equipment QR code?',
-      'a': 'Open the item from the Equipment Catalog — its QR code is shown on the Equipment Detail screen. You do not scan anything yourself: lab staff scan the code on each item when they hand it to you and again when you return it.',
+      'a': 'It is on a label stuck to the item itself. You do not scan anything yourself: lab staff scan the label on each item when they hand it to you and again when you return it. My Loans shows the code of each item you have on loan.',
     },
     {
       'q': 'What do I do if equipment is damaged?',
