@@ -294,8 +294,10 @@ service cloud.firestore {
     //     raw caller cannot pre-fill the approval audit trail and make a
     //     request look as though staff had already signed it off (P03);
     //   • the deadline must fall inside 24 hours — the server-side floor under
-    //     the same-day 5:00 PM policy the form enforces. Without it a raw
-    //     caller could ask for a months-long loan (P02).
+    //     the same-day 10:00 PM policy the form enforces. Without it a raw
+    //     caller could ask for a months-long loan (P02);
+    //   • subject and use_location (where the items will be used) are
+    //     required, so staff can trace every borrower (1.0.20, 2026-10-19).
     // And from 2026-10-03 (R2), every copied value must match its source:
     //   • borrower_name / student_number are the caller's OWN profile values,
     //     which is what borrowEquipment writes (QA H5). Staff read these on
@@ -317,8 +319,8 @@ service cloud.firestore {
         && request.resource.data.keys().hasOnly([
              'student_id', 'equipment_id', 'equipment_name', 'qr_code',
              'photo_thumb', 'category', 'borrower_name', 'student_number',
-             'subject', 'quantity', 'purpose', 'borrow_date', 'due_date',
-             'return_date', 'status'])
+             'subject', 'use_location', 'quantity', 'purpose', 'borrow_date',
+             'due_date', 'return_date', 'status'])
         && 'due_date' in request.resource.data
         && request.resource.data.due_date is timestamp
         && request.resource.data.due_date < request.time + duration.value(1, 'd')
@@ -328,7 +330,11 @@ service cloud.firestore {
         && request.resource.data.quantity >= 1
         && request.resource.data.quantity <= 10
         && request.resource.data.subject is string
+        && request.resource.data.subject.trim().size() >= 1
         && request.resource.data.subject.size() <= 200
+        && request.resource.data.use_location is string
+        && request.resource.data.use_location.trim().size() >= 1
+        && request.resource.data.use_location.size() <= 200
         && request.resource.data.purpose is string
         && request.resource.data.purpose.size() <= 2000
         && borrowerOk()

@@ -28,7 +28,7 @@ class _HelpFaqScreenState extends State<HelpFaqScreen> {
     },
     {
       'q': 'How long can I borrow equipment?',
-      'a': 'Borrowing is same-day only. Equipment is due back by 5:00 PM on the day it is borrowed, or by an earlier time you choose. Lab staff can give you a later time; My Loans always shows the time that applies.',
+      'a': 'Borrowing is same-day only. You can borrow from 7:00 AM. You choose the return time when you send the request, at the latest 10:00 PM on the day you borrow. Lab staff can give you a later time; My Loans always shows the time that applies.',
     },
     {
       'q': 'What happens if I return equipment late?',

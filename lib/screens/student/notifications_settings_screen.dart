@@ -119,7 +119,7 @@ class _NotificationsSettingsScreenState extends State<NotificationsSettingsScree
             _notifTile(
               title: 'Due Soon Reminder',
               // Loans are due the same day, so there is no "1 day before".
-              subtitle: 'On the day your equipment is due back (by 5:00 PM)',
+              subtitle: 'On the day your equipment is due back',
               value: _dueSoon,
               onChanged: (v) => setState(() => _dueSoon = v),
               activeColor: AppTheme.warning,

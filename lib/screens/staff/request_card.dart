@@ -61,6 +61,7 @@ class _PendingRequestCardState extends State<PendingRequestCard> {
     final name    = '${first['borrower_name'] ?? first['student_number'] ?? 'Student'}';
     final number  = '${first['student_number'] ?? ''}';
     final subject = '${first['subject'] ?? ''}'.trim();
+    final where   = '${first['use_location'] ?? ''}'.trim();
     final purpose = '${first['purpose'] ?? ''}'.trim();
     final due     = ApiService.asDate(first['due_date']);
     final codes   = [for (final t in request) '${t['qr_code'] ?? ''}']
@@ -121,8 +122,9 @@ class _PendingRequestCardState extends State<PendingRequestCard> {
 
         // Why, and until when.
         if (subject.isNotEmpty) _line(Icons.menu_book_outlined, 'Subject: $subject'),
+        if (where.isNotEmpty) _line(Icons.place_outlined, 'Where: $where'),
         if (purpose.isNotEmpty) _line(Icons.notes_rounded, 'Purpose: $purpose'),
-        // Staff can give a later time than the student asked for (5:00 PM
+        // Staff can give a later time than the student asked for (10:00 PM
         // is the usual latest, 2026-10-06).
         if (due != null)
           Row(children: [

@@ -21,27 +21,32 @@ import 'package:cea_lab_app/services/session.dart';
 import 'package:cea_lab_app/services/xlsx.dart';
 
 void main() {
-  group('Due-date policy (same-day 5:00 PM cap)', () {
+  group('Due-date policy (same-day 10:00 PM cap)', () {
     final morning = DateTime(2026, 7, 25, 9, 0);
 
-    test('honours a requested time before 5 PM, on today\'s date', () {
+    test('honours a requested time before 10 PM, on today\'s date', () {
       final due = ApiService.computeDueDate(morning, DateTime(2026, 7, 25, 15, 30));
       expect(due, DateTime(2026, 7, 25, 15, 30));
     });
 
-    test('a requested time of exactly 5:00 PM is allowed', () {
-      final due = ApiService.computeDueDate(morning, DateTime(2026, 7, 25, 17, 0));
-      expect(due, DateTime(2026, 7, 25, 17, 0));
-    });
-
-    test('clamps a requested time after 5 PM to 5:00 PM', () {
+    test('a time after 5 PM is allowed since 1.0.20', () {
       final due = ApiService.computeDueDate(morning, DateTime(2026, 7, 25, 19, 45));
-      expect(due, DateTime(2026, 7, 25, 17, 0));
+      expect(due, DateTime(2026, 7, 25, 19, 45));
     });
 
-    test('defaults to 5:00 PM when no time was requested', () {
+    test('a requested time of exactly 10:00 PM is allowed', () {
+      final due = ApiService.computeDueDate(morning, DateTime(2026, 7, 25, 22, 0));
+      expect(due, DateTime(2026, 7, 25, 22, 0));
+    });
+
+    test('clamps a requested time after 10 PM to 10:00 PM', () {
+      final due = ApiService.computeDueDate(morning, DateTime(2026, 7, 25, 22, 1));
+      expect(due, DateTime(2026, 7, 25, 22, 0));
+    });
+
+    test('defaults to 10:00 PM when no time was requested', () {
       final due = ApiService.computeDueDate(morning, null);
-      expect(due, DateTime(2026, 7, 25, 17, 0));
+      expect(due, DateTime(2026, 7, 25, 22, 0));
     });
 
     test('always lands on the borrow date (same-day policy)', () {
@@ -142,14 +147,14 @@ void main() {
   group('Due-date policy (a deadline already past)', () {
     final afternoon = DateTime(2026, 7, 25, 14, 0);
 
-    test('a requested time earlier than now falls back to 5:00 PM', () {
+    test('a requested time earlier than now falls back to 10:00 PM', () {
       final due = ApiService.computeDueDate(afternoon, DateTime(2026, 7, 25, 9, 0));
-      expect(due, DateTime(2026, 7, 25, 17, 0));
+      expect(due, DateTime(2026, 7, 25, 22, 0));
     });
 
-    test('a requested time equal to now falls back to 5:00 PM', () {
+    test('a requested time equal to now falls back to 10:00 PM', () {
       final due = ApiService.computeDueDate(afternoon, DateTime(2026, 7, 25, 14, 0));
-      expect(due, DateTime(2026, 7, 25, 17, 0));
+      expect(due, DateTime(2026, 7, 25, 22, 0));
     });
 
     test('a requested time still ahead is honoured', () {
@@ -979,7 +984,7 @@ void main() {
       expect(records, contains('Returned on time'));
       expect(records, contains('Dela Peña, Ana'));
       expect(records, contains('state="frozen"'));
-      expect(records, contains('<autoFilter ref="A1:Q3"/>'));
+      expect(records, contains('<autoFilter ref="A1:R3"/>'));
       expect(ReportXlsx.fileName(report), 'labtrack-report-2026-10-06-last-30-days.xlsx');
     });
   });

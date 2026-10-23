@@ -241,16 +241,16 @@ class _RequestCard extends StatelessWidget {
               : 'Cancelled by staff: $cancelReason'),
       'Approved' when ready => (Icons.storefront_outlined,
           'Approved. Pick it up at the lab: staff scan each item as they hand '
-              'it to you. Return it by ${due == null ? '5:00 PM today' : when(due)}.'),
+              'it to you. Return it by ${due == null ? '10:00 PM today' : when(due)}.'),
       'Approved' when overdue => (Icons.warning_amber_rounded,
           'Overdue: it was due back by ${due == null ? 'its due time' : when(due)}. Return it to '
               'the lab as soon as possible. You cannot borrow anything else until you do.'),
       'Approved' when partlyBack => (Icons.check_circle_outline_rounded,
           'Part of this request is back. Return the rest by '
-              '${due == null ? '5:00 PM today' : when(due)}.'),
+              '${due == null ? '10:00 PM today' : when(due)}.'),
       'Approved' => (Icons.check_circle_outline_rounded,
           'You have it. Return it to the lab by '
-              '${due == null ? '5:00 PM today' : when(due)}.'),
+              '${due == null ? '10:00 PM today' : when(due)}.'),
       'Rejected' => (Icons.cancel_outlined,
           reason.isEmpty ? 'Rejected by staff.' : 'Rejected by staff: $reason'),
       'Returned' => (Icons.assignment_turned_in_outlined, 'Returned. Thank you!'),

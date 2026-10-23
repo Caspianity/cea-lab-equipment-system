@@ -16,8 +16,8 @@
 // `version: <kAppVersion>+<kAppBuild>` in step. Dart cannot read pubspec at
 // runtime without adding the package_info_plus plugin, which is not worth a new
 // native dependency this close to the defense.
-const kAppVersion = '1.0.19';
-const kAppBuild = 34;
+const kAppVersion = '1.0.20';
+const kAppBuild = 35;
 
 // What the About screen prints, e.g. "Version 1.0.1 (build 2)".
 const kAppVersionLabel = 'Version $kAppVersion (build $kAppBuild)';
@@ -65,6 +65,11 @@ const kMaxUnitsPerRegistration = 200;
 // each record (the student's profile and the unit); a batch may make at most
 // 20 such reads, so 8 leaves room.
 const kMaxUnitsPerRequest = 8;
+
+// Borrowing hours (the lab's rule, 2026-10-19; was a 5:00 PM cap): requests
+// from 7:00 AM, and everything back the same day by 10:00 PM at the latest.
+const kBorrowOpenHour = 7;
+const kReturnByHour = 22;
 
 // The statuses of a request that is still open: waiting for staff, or approved
 // (set aside for pick-up or out on loan). The checks before a new request (an

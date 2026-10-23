@@ -122,7 +122,12 @@ class _AdminRequestsScreenState extends State<AdminRequestsScreen> {
     // Always a String: `.isNotEmpty` and `[0]` below would throw on any other
     // stored type and blank the card (QA 2026-10-03).
     final studentName = '${e['borrower_name'] ?? e['student_number'] ?? ''}';
-    final subject = '${e['subject'] ?? ''}'.trim();
+    final s = '${e['subject'] ?? ''}'.trim();
+    final w = '${e['use_location'] ?? ''}'.trim();
+    final subject = joinParts([
+      if (s.isNotEmpty) 'Subject: $s',
+      if (w.isNotEmpty) 'Where: $w',
+    ]);
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
@@ -159,7 +164,7 @@ class _AdminRequestsScreenState extends State<AdminRequestsScreen> {
           ),
           if (subject.isNotEmpty) ...[
             const SizedBox(height: 6),
-            Text('Subject: $subject',
+            Text(subject,
                 style: const TextStyle(fontSize: 11, color: AppTheme.textMid)),
           ],
           if (status == 'Rejected' && '${e['reject_reason'] ?? ''}'.isNotEmpty) ...[

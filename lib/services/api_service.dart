@@ -1699,7 +1699,7 @@ class ApiService {
       // no longer reach anything they could not reach already.
 
       // Honour the student's requested return time, enforcing the same-day
-      // 5:00 PM laboratory policy as the latest possible deadline.
+      // 10:00 PM laboratory policy as the latest possible deadline.
       final now = DateTime.now();
       final dueDate =
           computeDueDate(now, DateTime.tryParse('${data['due_date'] ?? ''}'));
@@ -1739,6 +1739,8 @@ class ApiService {
           'borrower_name':  stuData?['name'] ?? data['borrower_name'] ?? '',
           'student_number': stuData?['student_number'] ?? data['student_number'] ?? '',
           'subject':        data['subject'] ?? '',
+          // Where the items will be used (1.0.20), for tracing the borrower.
+          'use_location':   data['use_location'] ?? '',
           // One unit per record; the request's size is how many records
           // share its borrow_date.
           'quantity':       1,
@@ -1772,23 +1774,23 @@ class ApiService {
     }
   }
 
-  // Same-day 5:00 PM due-date policy: a requested time at or before 17:00 is
-  // honoured (on today's date); anything later — or no request — clamps to
-  // 17:00. Public and pure so the policy is unit-testable (see test/).
+  // Same-day 10:00 PM due-date policy (kReturnByHour; 5:00 PM until 1.0.20):
+  // a requested time at or before 22:00 is honoured (on today's date);
+  // anything later — or no request — clamps to 22:00. Public and pure so the
+  // policy is unit-testable (see test/).
   //
   // A requested time that has already passed is not a deadline at all, so it
-  // falls back to the 17:00 default instead of being stored as-is. The form
+  // falls back to the 22:00 default instead of being stored as-is. The form
   // refuses one up front with a clear message; this is the backstop that keeps
   // a loan from being overdue the instant it is approved (QA 2026-09-19, M3).
   static DateTime computeDueDate(DateTime now, DateTime? requested) {
-    if (requested != null &&
-        !(requested.hour > 17 ||
-            (requested.hour == 17 && requested.minute > 0))) {
+    final latest = DateTime(now.year, now.month, now.day, kReturnByHour, 0, 0);
+    if (requested != null) {
       final sameDay = DateTime(
           now.year, now.month, now.day, requested.hour, requested.minute, 0);
-      if (sameDay.isAfter(now)) return sameDay;
+      if (sameDay.isAfter(now) && !sameDay.isAfter(latest)) return sameDay;
     }
-    return DateTime(now.year, now.month, now.day, 17, 0, 0);
+    return latest;
   }
 
   // Equipment status for a given condition. Used both when an item is returned
@@ -2520,8 +2522,8 @@ class ApiService {
     };
   }
 
-  // Staff set the return time of a pending or approved request (5:00 PM is the
-  // usual time; staff can give a later one, 2026-10-06). Every record of the
+  // Staff set the return time of a pending or approved request (10:00 PM is
+  // the usual latest; staff can give a later one, 2026-10-06). Every record of the
   // request still Pending or Approved gets it, checked inside one
   // transaction so a record returned meanwhile keeps its own deadline.
   static Future<Map<String, dynamic>> setDueTime(

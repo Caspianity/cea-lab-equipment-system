@@ -46,7 +46,11 @@ void main() {
         'Pick up at the lab', 'Return on time']) {
       expect(find.text(step), findsOneWidget);
     }
+    // scrollUntilVisible stops as soon as the button is built, which can be
+    // just below the 800×600 test screen; ensureVisible then brings it in.
     await tester.scrollUntilVisible(find.text('Got it'), 200);
+    await tester.ensureVisible(find.text('Got it'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Got it'));
     await tester.pumpAndSettle();
     expect(find.text('How Borrowing Works'), findsNothing);

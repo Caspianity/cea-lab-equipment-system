@@ -9,8 +9,9 @@
 //   • Ready for pick-up: Hand over, or Not picked up if the student never came;
 //   • On loan / Overdue: return one item (Good or Report Damage), or Return
 //     all in good condition.
-// Both show the return time, which staff can change (changeReturnTime): 5:00 PM
-// is the usual time, and staff can give a later one.
+// Both show the return time, which staff can change (changeReturnTime): 10:00
+// PM is the usual latest, and staff can give a later one. Subject and Where
+// (1.0.20) show under the student, so staff can trace who has the items.
 // -----------------------------------------------------------------------------
 
 import 'package:flutter/material.dart';
@@ -204,6 +205,8 @@ class _LoanRequestCardState extends State<LoanRequestCard> {
     final due     = ApiService.asDate(first['due_date']);
     final name    = '${first['borrower_name'] ?? first['student_number'] ?? 'Student'}';
     final number  = '${first['student_number'] ?? ''}';
+    final trace   = joinParts([first['subject'], first['use_location']]
+        .map((v) => '${v ?? ''}'.trim()).where((v) => v.isNotEmpty));
     final (label, color) = ready
         ? ('Ready for pick-up', AppTheme.primary)
         : overdue
@@ -234,6 +237,8 @@ class _LoanRequestCardState extends State<LoanRequestCard> {
                 fontWeight: FontWeight.bold, fontSize: 13, color: AppTheme.textDark)),
             if (number.isNotEmpty)
               Text('ID: $number', style: const TextStyle(fontSize: 11, color: AppTheme.textMid)),
+            if (trace.isNotEmpty)
+              Text(trace, style: const TextStyle(fontSize: 11, color: AppTheme.textMid)),
           ])),
           StatusBadge(label: label, color: color),
         ]),

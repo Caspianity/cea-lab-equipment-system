@@ -47,7 +47,8 @@ class HowItWorksScreen extends StatelessWidget {
       Icons.playlist_add_rounded,
       'Choose and send',
       'On Home, tap New Request. Pick the items and how many of each (up to '
-          '$kMaxUnitsPerRequest in one request), and submit. They are reserved '
+          '$kMaxUnitsPerRequest in one request), fill in the subject, where you '
+          'will use them and your return time, and submit. They are reserved '
           'for you at once, so nobody else can take them while staff decide.',
     ),
     (
@@ -66,7 +67,7 @@ class HowItWorksScreen extends StatelessWidget {
     (
       Icons.assignment_return_outlined,
       'Return on time',
-      'Bring everything back by 5:00 PM, or by the later time staff give you. '
+      'Bring everything back by the time you chose (10:00 PM at the latest), or by the later time staff give you. '
           'Staff scan each item back in. While an item is late, you cannot '
           'borrow anything else.',
     ),

@@ -35,11 +35,11 @@ class ReportXlsx {
 
   static const recordColumns = [
     'Requested', 'Student', 'Student No.', 'Item', 'Item code', 'Status', 'Result',
-    'Return by', 'Picked up', 'Returned', 'Condition', 'Subject', 'Purpose',
-    'Approved by', 'Handed over by', 'Received by', 'Notes',
+    'Return by', 'Picked up', 'Returned', 'Condition', 'Subject', 'Where',
+    'Purpose', 'Approved by', 'Handed over by', 'Received by', 'Notes',
   ];
   static const _recordWidths = <double>[
-    22, 26, 15, 30, 13, 12, 20, 22, 22, 22, 12, 18, 34, 18, 18, 18, 36,
+    22, 26, 15, 30, 13, 12, 20, 22, 22, 22, 12, 18, 24, 34, 18, 18, 18, 36,
   ];
 
   // "labtrack-report-2026-10-07-last-90-days.xlsx"
@@ -152,6 +152,7 @@ class ReportXlsx {
             date(t['return_date']),
             text(t['condition_returned']),
             text(t['subject']),
+            text(t['use_location']),
             text(t['purpose']),
             text(t['approved_by_name']),
             text(t['picked_up_by_name']),
